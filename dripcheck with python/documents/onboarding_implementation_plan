@@ -1,0 +1,75 @@
+# Onboarding Feature Implementation Plan
+
+This plan outlines the steps to implement a required onboarding flow for new users, including dynamic questions, JSON response storage, and API validation.
+
+## User Review Required
+
+> [!WARNING]
+> We will be adding an `is_onboarded` field to the `User` model, which requires a database migration on the `accounts` app.
+> We will also create a completely new Django app called `onboarding`.
+> Are you okay with storing the user's answers purely in a `JSONField` as requested, or would you prefer a relational table for each answer? The current plan goes with `JSONField` per your requirement ("store all the onboarding questions and anss of that uers in json format and map with user_id").
+
+## Open Questions
+
+> [!IMPORTANT]
+> Question 1: Basic Profile Setup asks for Full Name, Username, and Email. Should I also update the Django `User` model with these details (e.g., adding `first_name`, `email` fields to `User`), or ONLY store them in the JSON `responses` field? By default, I will update the `User` model's `email` and `first_name`/`last_name` (or `full_name`) if provided, plus store the full JSON payload.
+
+## Proposed Changes
+
+### accounts (App)
+
+Updates to the user model and permissions to enforce the onboarding requirement.
+
+#### [MODIFY] accounts/models.py
+- Add `is_onboarded = models.BooleanField(default=False)` to the `User` model.
+- Add `full_name = models.CharField(max_length=255, blank=True, null=True)`
+- Add `email = models.EmailField(blank=True, null=True)`
+
+#### [NEW] accounts/permissions.py
+- Create a custom DRF permission class `IsOnboardedUser` which inherits from `IsAuthenticated` and checks `request.user.is_onboarded`. This can be applied to the homepage API in the future.
+
+### onboarding (New App)
+
+A new Django app specifically for managing onboarding questions, options, and user responses.
+
+#### [NEW] onboarding/models.py
+- `OnboardingQuestion`: Stores the question text, order, and type (e.g., text, single-choice, multiple-choice).
+- `OnboardingOption`: Stores available options for a specific question.
+- `UserOnboardingResponse`: Stores the user's answers.
+  - `user`: OneToOneField to `User`.
+  - `responses`: `JSONField` containing the mapped question IDs/Text to their provided answers.
+
+#### [NEW] onboarding/admin.py
+- Register `OnboardingQuestion`, `OnboardingOption`, and `UserOnboardingResponse` so questions and options can be edited from the Django Admin Panel.
+
+#### [NEW] onboarding/views.py
+- `OnboardingQuestionsView` (GET): Returns the list of all active onboarding questions and their options.
+- `SubmitOnboardingView` (POST): Accepts the JSON payload of answers, validates it, saves to `UserOnboardingResponse`, updates `User.is_onboarded = True` (and profile details), and returns a success response. Both views will require Bearer Token Authentication.
+
+#### [NEW] onboarding/serializers.py
+- Serializers to format the questions/options for the frontend and validate the incoming JSON response.
+
+#### [NEW] onboarding/urls.py
+- Map the endpoints: `/api/onboarding/questions/` and `/api/onboarding/submit/`
+
+### dripcheck_django (Project Settings)
+
+#### [MODIFY] dripcheck_django/settings.py
+- Add `'onboarding'` to `INSTALLED_APPS`.
+
+#### [MODIFY] dripcheck_django/urls.py
+- Include `onboarding.urls`.
+
+## Verification Plan
+
+### Automated Tests
+- N/A at this stage; will rely on manual verification using API endpoints.
+
+### Manual Verification
+- Run `python manage.py makemigrations` and `python manage.py migrate`.
+- Create a superuser and log into the Django Admin panel.
+- Verify we can add/edit questions and options.
+- Call the GET `/api/onboarding/questions/` endpoint to retrieve the questions.
+- Call the POST `/api/onboarding/submit/` endpoint with a valid Bearer token and JSON answers.
+- Verify the user's `is_onboarded` flag is updated to `True` and responses are saved in the DB.
+- Attempt to hit an endpoint protected by `IsOnboardedUser` without completing onboarding to ensure it raises an error.
