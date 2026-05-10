@@ -1,7 +1,7 @@
 import random
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Set
-from models.types import WardrobeItem, ColorFamily, OccasionType, Category, OutfitBundle
+from api.models import WardrobeItem, ColorFamily, OccasionType, Category, OutfitBundle
 
 # ==========================================
 # PART 1: Color System
@@ -29,7 +29,7 @@ PRIMARY_COLOR_TO_FAMILY: Dict[str, ColorFamily] = {
 }
 
 def get_harmony_tier(color1: ColorFamily, color2: ColorFamily) -> int:
-    pair_list = sorted([color1.value, color2.value])
+    pair_list = sorted([color1, color2])
     pair = f"{pair_list[0]}+{pair_list[1]}"
 
     if pair == 'Neutral+Neutral': return 2
@@ -56,17 +56,17 @@ def get_harmony_tier(color1: ColorFamily, color2: ColorFamily) -> int:
 
 def compute_dominant_color(items: List[WardrobeItem]) -> dict:
     weights = {
-        Category.TOP.value: 3,
-        Category.BOTTOM.value: 3,
-        Category.LAYER.value: 2,
-        Category.FOOTWEAR.value: 1,
-        Category.ACCESSORY.value: 0.5
+        Category.TOP: 3,
+        Category.BOTTOM: 3,
+        Category.LAYER: 2,
+        Category.FOOTWEAR: 1,
+        Category.ACCESSORY: 0.5
     }
 
     color_scores: Dict[str, float] = {}
 
     for item in items:
-        weight = weights.get(item.category.value, 1)
+        weight = weights.get(item.category, 1)
         color = item.primary_color
         color_scores[color] = color_scores.get(color, 0) + weight
 
@@ -81,7 +81,7 @@ def compute_dominant_color(items: List[WardrobeItem]) -> dict:
             dominant_colors.append(color)
 
     final_color_str = " / ".join(dominant_colors)
-    final_palette = PRIMARY_COLOR_TO_FAMILY.get(dominant_colors[0], ColorFamily.NEUTRAL).value
+    final_palette = PRIMARY_COLOR_TO_FAMILY.get(dominant_colors[0], ColorFamily.NEUTRAL)
 
     return {
         "color": final_color_str,
@@ -103,18 +103,18 @@ def calculate_compatibility_score(items: List[WardrobeItem]) -> dict:
         return {"score": 0, "is_valid": False, "rejection_reason": "formality_gap"}
 
     # HARD REJECT R2: Season mismatch
-    specific_seasons = set(i.season.value for i in items if i.season.value != 'All-season')
+    specific_seasons = set(i.season for i in items if i.season != 'All-season')
     if len(specific_seasons) > 1:
         return {"score": 0, "is_valid": False, "rejection_reason": "season_mismatch"}
 
     # HARD REJECT R3: Pattern conflict
-    patterned_items = [i for i in items if i.pattern.value != 'Solid']
+    patterned_items = [i for i in items if i.pattern != 'Solid']
     if len(patterned_items) >= 2:
-        has_graphic = any(i.pattern.value == 'Graphic' for i in patterned_items)
+        has_graphic = any(i.pattern == 'Graphic' for i in patterned_items)
         if has_graphic:
             return {"score": 0, "is_valid": False, "rejection_reason": "pattern_conflict"}
         complex_patterns = {'Stripes', 'Checks', 'Floral', 'Abstract'}
-        complex_count = sum(1 for i in patterned_items if i.pattern.value in complex_patterns)
+        complex_count = sum(1 for i in patterned_items if i.pattern in complex_patterns)
         if complex_count >= 2:
             return {"score": 0, "is_valid": False, "rejection_reason": "pattern_conflict"}
 
@@ -155,12 +155,12 @@ def calculate_compatibility_score(items: List[WardrobeItem]) -> dict:
         score += 15
 
     # Fit Harmony
-    top = next((i for i in items if i.category.value == 'Top'), None)
-    bottom = next((i for i in items if i.category.value == 'Bottom'), None)
+    top = next((i for i in items if i.category == 'Top'), None)
+    bottom = next((i for i in items if i.category == 'Bottom'), None)
     if top and bottom:
-        if top.fit.value == 'Oversized' and bottom.fit.value in ['Slim', 'Tapered']:
+        if top.fit == 'Oversized' and bottom.fit in ['Slim', 'Tapered']:
             score += 10
-        elif top.fit.value == 'Oversized' and bottom.fit.value in ['Baggy', 'Oversized']:
+        elif top.fit == 'Oversized' and bottom.fit in ['Baggy', 'Oversized']:
             score -= 10
 
     # Brand Cohesion
@@ -176,7 +176,7 @@ def calculate_compatibility_score(items: List[WardrobeItem]) -> dict:
         score += 5
 
     # Footwear Presence
-    has_footwear = any(i.category.value == 'Footwear' for i in items)
+    has_footwear = any(i.category == 'Footwear' for i in items)
     if has_footwear:
         score += 5
 
@@ -210,17 +210,17 @@ def assign_style_tags(items: List[WardrobeItem]) -> List[dict]:
         {
             'name': 'Minimalist',
             'rules': [
-                lambda: sum(1 for i in items if i.pattern.value == 'Solid') >= 2,
-                lambda: all(i.color_family.value == 'Neutral' or PRIMARY_COLOR_TO_FAMILY.get(i.primary_color, ColorFamily.NEUTRAL).value == 'Neutral' for i in items),
-                lambda: all(i.fit.value not in ['Oversized', 'Baggy'] for i in items)
+                lambda: sum(1 for i in items if i.pattern == 'Solid') >= 2,
+                lambda: all(i.color_family == 'Neutral' or PRIMARY_COLOR_TO_FAMILY.get(i.primary_color, ColorFamily.NEUTRAL) == 'Neutral' for i in items),
+                lambda: all(i.fit not in ['Oversized', 'Baggy'] for i in items)
             ]
         },
         {
             'name': 'Streetwear',
             'rules': [
-                lambda: any(i.fit.value in ['Oversized', 'Baggy'] for i in items),
-                lambda: any(i.pattern.value == 'Graphic' for i in items),
-                lambda: any(i.category.value == 'Footwear' and i.subcategory == 'Sneakers' for i in items)
+                lambda: any(i.fit in ['Oversized', 'Baggy'] for i in items),
+                lambda: any(i.pattern == 'Graphic' for i in items),
+                lambda: any(i.category == 'Footwear' and i.subcategory == 'Sneakers' for i in items)
             ]
         },
         {
@@ -228,40 +228,40 @@ def assign_style_tags(items: List[WardrobeItem]) -> List[dict]:
             'rules': [
                 lambda: any(i.subcategory in ['Joggers', 'Leggings', 'Hoodie'] for i in items),
                 lambda: any(i.material in ['Polyester', 'Spandex'] for i in items),
-                lambda: any(i.category.value == 'Footwear' and i.subcategory == 'Running Shoes' for i in items)
+                lambda: any(i.category == 'Footwear' and i.subcategory == 'Running Shoes' for i in items)
             ]
         },
         {
             'name': 'Vintage/Retro',
             'rules': [
-                lambda: any(i.pattern.value in ['Checks', 'Floral'] for i in items),
+                lambda: any(i.pattern in ['Checks', 'Floral'] for i in items),
                 lambda: any(i.primary_color in ['Mustard', 'Navy', 'Olive'] for i in items),
-                lambda: any(i.fit.value in ['Relaxed', 'Oversized'] for i in items)
+                lambda: any(i.fit in ['Relaxed', 'Oversized'] for i in items)
             ]
         },
         {
             'name': 'Bohemian/Boho',
             'rules': [
                 lambda: any(i.material in ['Cotton', 'Linen'] for i in items),
-                lambda: any(i.pattern.value in ['Floral', 'Abstract'] for i in items),
-                lambda: all(i.color_family.value == 'Earth' for i in items),
-                lambda: any(i.fit.value in ['Relaxed', 'Baggy', 'Oversized'] for i in items)
+                lambda: any(i.pattern in ['Floral', 'Abstract'] for i in items),
+                lambda: all(i.color_family == 'Earth' for i in items),
+                lambda: any(i.fit in ['Relaxed', 'Baggy', 'Oversized'] for i in items)
             ]
         },
         {
             'name': 'Classic/Timeless',
             'rules': [
                 lambda: all(i.primary_color in ['Navy', 'White', 'Beige', 'Charcoal'] for i in items),
-                lambda: all(i.fit.value in ['Slim', 'Regular'] for i in items),
-                lambda: all(i.pattern.value == 'Solid' for i in items)
+                lambda: all(i.fit in ['Slim', 'Regular'] for i in items),
+                lambda: all(i.pattern == 'Solid' for i in items)
             ]
         },
         {
             'name': 'Business Casual',
             'rules': [
                 lambda: any(i.subcategory in ['Chinos', 'Blazer'] for i in items),
-                lambda: any(i.category.value == 'Footwear' and i.subcategory in ['Loafers', 'Oxfords'] for i in items),
-                lambda: all(i.color_family.value in ['Neutral', 'Dark'] or PRIMARY_COLOR_TO_FAMILY.get(i.primary_color, ColorFamily.NEUTRAL).value in ['Neutral', 'Dark'] for i in items)
+                lambda: any(i.category == 'Footwear' and i.subcategory in ['Loafers', 'Oxfords'] for i in items),
+                lambda: all(i.color_family in ['Neutral', 'Dark'] or PRIMARY_COLOR_TO_FAMILY.get(i.primary_color, ColorFamily.NEUTRAL) in ['Neutral', 'Dark'] for i in items)
             ]
         },
         {
@@ -269,7 +269,7 @@ def assign_style_tags(items: List[WardrobeItem]) -> List[dict]:
             'rules': [
                 lambda: any(i.primary_color in ['Baby Pink', 'Silver', 'Neon Green'] for i in items),
                 lambda: any(i.subcategory in ['Crop Top', 'Tank Top'] for i in items),
-                lambda: any(i.pattern.value in ['Graphic', 'Abstract'] for i in items)
+                lambda: any(i.pattern in ['Graphic', 'Abstract'] for i in items)
             ]
         },
         {
@@ -277,14 +277,14 @@ def assign_style_tags(items: List[WardrobeItem]) -> List[dict]:
             'rules': [
                 lambda: any(i.subcategory in ['Polo', 'Blazer'] for i in items),
                 lambda: any(i.primary_color in ['Navy', 'Burgundy', 'Dark Green'] for i in items),
-                lambda: any(i.pattern.value in ['Stripes', 'Checks'] for i in items)
+                lambda: any(i.pattern in ['Stripes', 'Checks'] for i in items)
             ]
         },
         {
             'name': 'Grunge',
             'rules': [
                 lambda: any(i.primary_color in ['Black', 'Dark Green', 'Burgundy'] for i in items),
-                lambda: any(i.subcategory == 'Shirt' and i.pattern.value == 'Checks' for i in items),
+                lambda: any(i.subcategory == 'Shirt' and i.pattern == 'Checks' for i in items),
                 lambda: any(i.subcategory in ['Jeans', 'Boots'] for i in items)
             ]
         },
@@ -292,7 +292,7 @@ def assign_style_tags(items: List[WardrobeItem]) -> List[dict]:
             'name': 'Monochrome',
             'rules': [
                 lambda: len(set(i.primary_color for i in items)) == 1 if items else False,
-                lambda: len(set(i.color_family.value or PRIMARY_COLOR_TO_FAMILY.get(i.primary_color, ColorFamily.NEUTRAL).value for i in items)) == 1 if items else False
+                lambda: len(set(i.color_family or PRIMARY_COLOR_TO_FAMILY.get(i.primary_color, ColorFamily.NEUTRAL) for i in items)) == 1 if items else False
             ]
         },
         {
@@ -307,7 +307,7 @@ def assign_style_tags(items: List[WardrobeItem]) -> List[dict]:
             'name': 'Cottagecore',
             'rules': [
                 lambda: any(i.primary_color in ['Ivory', 'Lavender', 'Sage Green'] for i in items),
-                lambda: any(i.pattern.value in ['Floral', 'Checks'] for i in items),
+                lambda: any(i.pattern in ['Floral', 'Checks'] for i in items),
                 lambda: any(i.material in ['Cotton', 'Linen'] for i in items)
             ]
         },
@@ -315,16 +315,16 @@ def assign_style_tags(items: List[WardrobeItem]) -> List[dict]:
             'name': 'Bold/Statement',
             'rules': [
                 lambda: any(i.primary_color in ['Red', 'Yellow', 'Cobalt Blue', 'Fuchsia', 'Neon Green'] for i in items),
-                lambda: any(i.pattern.value in ['Graphic', 'Abstract'] for i in items),
-                lambda: any(i.fit.value == 'Oversized' for i in items)
+                lambda: any(i.pattern in ['Graphic', 'Abstract'] for i in items),
+                lambda: any(i.fit == 'Oversized' for i in items)
             ]
         },
         {
             'name': 'Layered',
             'rules': [
-                lambda: sum(1 for i in items if i.category.value in ['Top', 'Layer', 'Accessory']) >= 3,
-                lambda: any(i.category.value == 'Layer' for i in items),
-                lambda: any(i.category.value == 'Accessory' for i in items)
+                lambda: sum(1 for i in items if i.category in ['Top', 'Layer', 'Accessory']) >= 3,
+                lambda: any(i.category == 'Layer' for i in items),
+                lambda: any(i.category == 'Accessory' for i in items)
             ]
         }
     ]
@@ -356,7 +356,7 @@ def generate_bundles(
         avoided_lower = [c.lower() for c in avoided_colors]
         filtered_pool = []
         for item in initial_pool:
-            p_color_family = PRIMARY_COLOR_TO_FAMILY.get(item.primary_color, ColorFamily.NEUTRAL).value
+            p_color_family = PRIMARY_COLOR_TO_FAMILY.get(item.primary_color, ColorFamily.NEUTRAL)
             if item.primary_color.lower() not in avoided_lower and p_color_family.lower() not in avoided_lower:
                 filtered_pool.append(item)
         initial_pool = filtered_pool
@@ -364,10 +364,10 @@ def generate_bundles(
     if occasion_filter:
         initial_pool = [i for i in initial_pool if occasion_filter in i.occasion_type]
 
-    tops = [i for i in initial_pool if i.category.value == 'Top']
-    bottoms = [i for i in initial_pool if i.category.value == 'Bottom']
-    shoes = [i for i in initial_pool if i.category.value == 'Footwear']
-    layers = [i for i in initial_pool if i.category.value == 'Layer']
+    tops = [i for i in initial_pool if i.category == 'Top']
+    bottoms = [i for i in initial_pool if i.category == 'Bottom']
+    shoes = [i for i in initial_pool if i.category == 'Footwear']
+    layers = [i for i in initial_pool if i.category == 'Layer']
 
     valid_combinations = []
 
@@ -414,9 +414,9 @@ def generate_bundles(
     bundles = []
     for combo in top_10:
         rand_str = ''.join(random.choices('0123456789abcdefghijklmnopqrstuvwxyz', k=7))
-        occ_tags = list(set([occ.value for item in combo['items'] for occ in item.occasion_type]))
+        occ_tags = list(set([occ for item in combo['items'] for occ in item.occasion_type]))
         if occasion_filter:
-            occ_tags = [tag for tag in occ_tags if tag == occasion_filter.value]
+            occ_tags = [tag for tag in occ_tags if tag == occasion_filter]
         
         mood_tags_set = set()
         for item in combo['items']:

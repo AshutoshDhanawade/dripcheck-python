@@ -1,0 +1,93 @@
+# Bundle Generate App Implementation Plan
+
+This plan details the implementation of a new Django app (`bundle_generate`), a Merchant Database for storing products, a database seeding script, and an API endpoint to generate curated outfit bundles based on a selected merchant product using the existing compatibility engine.
+
+## User Review Required
+
+> [!IMPORTANT]
+> - **Merchant Database Fields**: I will create a `MerchantProduct` model that closely mirrors `WardrobeItem` so it can seamlessly work with the `compatibility_engine`. Are there any specific merchant-only fields you want to add (e.g., `price`, `stock_url`, `merchant_name`)?
+> - **User Context**: Should the `GenerateFromProductView` (the bundle generation API) also take a `user_id` to factor in user preferences (like avoided colors, favorite styles) when generating bundles from the merchant database?
+> - **Category Mapping**: The prompt mentions "Topwear", "Bottomwear", and "Footwear". Internally, the engine uses "Top", "Bottom", and "Footwear" (from `Category` choices). I will map these automatically.
+
+## Open Questions
+
+> [!WARNING]
+> - For the payload of the product click `{"category_name": "...", "product": {...}}`, should the `product` be passed as a full JSON object from the frontend, or would you prefer just passing a `product_id` and fetching the product details from the `MerchantProduct` database?
+> - Should the seeded data use specific brand names and realistic image URLs, or are generic placeholders acceptable for the 100 items per category?
+
+## Proposed Changes
+
+---
+
+### Django App Setup
+
+#### [NEW] `bundle_generate` app
+- Create a new Django app using `python manage.py startapp bundle_generate`.
+- Add `bundle_generate` to `INSTALLED_APPS` in `dripcheck_django/settings.py`.
+- Configure `urls.py` within `bundle_generate` and include it in the main project `dripcheck_django/urls.py`.
+
+---
+
+### Models
+
+#### [NEW] `bundle_generate/models.py`
+- Create `MerchantProduct` model.
+- Fields: `product_id` (primary key), `name`, `category` (Top, Bottom, Footwear), `primary_color`, `color_family`, `pattern`, `fit`, `occasion_type`, `season`, `formality_level`, `brand`, `material`, `style_tags`, `mood_tags`, `image_url`, `price`.
+- Ensure it mirrors the fields required by `engine/compatibility_engine.py` to allow direct scoring.
+
+---
+
+### Seeding Script
+
+#### [NEW] `bundle_generate/management/commands/seed_merchant_db.py`
+- Create a custom Django management command: `python manage.py seed_merchant_db`.
+- **Logic**: 
+  - Clear existing `MerchantProduct` data.
+  - Generate 100 entries for `Top`, 100 for `Bottom`, and 100 for `Footwear`.
+  - Randomize colors (from `ColorFamily`), patterns (`Pattern`), fits (`Fit`), and formalities to ensure the compatibility engine has diverse data to form high-scoring bundles.
+
+---
+
+### Views & API Endpoints
+
+#### [NEW] `bundle_generate/views.py`
+- **`HomepageProductsView` (GET)**:
+  - Fetches and returns all items from the `MerchantProduct` database.
+  - Useful for the homepage display right after onboarding.
+  - Includes optional pagination if necessary.
+
+- **`GenerateFromProductView` (POST)**:
+  - **Endpoint**: `/api/bundle-generate/recommend/`
+  - **Payload**: `{"user_id": "...", "category_name": "...", "product": {...}}` (or just `product_id`).
+  - **Logic**:
+    1. Identify the selected category (e.g., Top).
+    2. Determine the missing categories required for a full bundle (e.g., Bottom and Footwear).
+    3. Query the `MerchantProduct` database for items in the missing categories.
+    4. Apply User Preferences (if `user_id` is provided): Filter out items with the user's `avoided_colors`.
+    5. Form all valid combinations (Selected Item + Candidate Bottom + Candidate Footwear).
+    6. Run combinations through `compatibility_engine.calculate_compatibility_score`.
+    7. Sort by score, deduplicate, and compute dominant colors & style tags using the engine's functions.
+    8. Return the top 10 ranked outfit recommendations.
+
+#### [NEW] `bundle_generate/serializers.py`
+- `MerchantProductSerializer`: For serializing merchant products for the homepage.
+- `GeneratedBundleSerializer`: For serializing the resulting bundles (similar to `OutfitBundleSerializer`).
+
+#### [MODIFY] `bundle_generate/urls.py`
+- Map `/homepage/` to `HomepageProductsView`.
+- Map `/recommend/` to `GenerateFromProductView`.
+
+---
+
+## Verification Plan
+
+### Automated Tests
+- Run `python manage.py makemigrations bundle_generate` and `python manage.py migrate` to ensure the new models are valid.
+- Run `python manage.py seed_merchant_db` and verify that exactly 300 items are created in the database.
+
+### Manual Verification
+- Test the `/homepage/` GET endpoint to ensure products are retrieved successfully.
+- Test the `/recommend/` POST endpoint using Postman or cURL:
+  - Send a payload containing a selected "Top".
+  - Verify the response contains a list of bundles, each containing the selected Top + a new Bottom + a new Footwear.
+  - Check that the compatibility scores are populated and items match aesthetically (e.g., no color clashes or pattern conflicts).
