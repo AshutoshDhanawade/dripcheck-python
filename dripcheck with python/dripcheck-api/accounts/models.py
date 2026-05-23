@@ -86,6 +86,7 @@ class OnboardingOption(models.Model):
         return f"{self.question.text[:30]} - {self.text}"
 
 class UserOnboardingResponse(models.Model):
+    mobile_no = models.CharField(max_length=10, null=True, blank=True)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='onboarding_response')
     responses = models.JSONField(default=dict, help_text="Stores the user's answers as JSON")
     completed_at = models.DateTimeField(auto_now_add=True)

@@ -1,10 +1,17 @@
+from rest_framework.permissions import AllowAny
 import random
+from django.conf import settings
+from twilio.rest import Client
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from .serializers import SignupSerializer, VerifyOTPSerializer, LoginSerializer
 from .models import User, OTPRecord
+from api.models import WardrobeItem
+from api.serializers import WardrobeItemSerializer
+from bundle_generate.models import MerchantProduct
+from bundle_generate.serializers import MerchantProductSerializer
 
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -27,7 +34,19 @@ class SignupView(APIView):
                 # Save OTP to database
                 OTPRecord.objects.create(mobile_no=mobile_no, otp=otp)
                 
-                # In a real app, send OTP via SMS here. For now, print to console.
+                # Send OTP via SMS using Twilio
+                try:
+                    client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                    message = client.messages.create(
+                        body=f"Your Dripcheck verification code is: {otp}",
+                        from_=settings.TWILIO_PHONE_NUMBER,
+                        to=mobile_no
+                    )
+                except Exception as sms_e:
+                    print(f"Failed to send SMS via Twilio: {sms_e}")
+                    # You might want to log this or handle it differently in production
+                    
+                # Also print to console for development convenience
                 print(f"--- OTP for {mobile_no} is: {otp} ---")
                 
                 return Response({"message": "OTP sent successfully."}, status=status.HTTP_200_OK)
@@ -81,10 +100,27 @@ class LoginView(APIView):
                 # Generate or get existing token
                 token, created = Token.objects.get_or_create(user=user)
                 
-                return Response({
+                response_data = {
                     "token": token.key,
-                    "message": "Login successful."
-                }, status=status.HTTP_200_OK)
+                    "message": "Login successful.",
+                    "is_new_user": not user.is_onboarded,
+                    "wardrobe": []
+                }
+                
+                wardrobe_empty = True
+                if user.is_onboarded:
+                    wardrobe_items = WardrobeItem.objects.filter(user_id=mobile_no)
+                    if wardrobe_items.exists():
+                        wardrobe_serializer = WardrobeItemSerializer(wardrobe_items, many=True)
+                        response_data["wardrobe"] = wardrobe_serializer.data
+                        wardrobe_empty = False
+                        
+                if wardrobe_empty:
+                    products = MerchantProduct.objects.all().order_by('-sales_count')[:10]
+                    product_serializer = MerchantProductSerializer(products, many=True)
+                    response_data["best_selling_products"] = product_serializer.data
+                
+                return Response(response_data, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response(

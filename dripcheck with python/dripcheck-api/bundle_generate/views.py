@@ -46,6 +46,17 @@ class HomepageProductsView(APIView):
         serializer = MerchantProductSerializer(products, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+class BestSellingProductsView(APIView):
+    """
+    GET /api/bundle-generate/homepage/best-selling/
+    Returns top N products from the merchant database based on sales count.
+    """
+    def get(self, request):
+        # Return top 10 best-selling products
+        products = MerchantProduct.objects.all().order_by('-sales_count')[:10]
+        serializer = MerchantProductSerializer(products, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 class GenerateFromProductView(APIView):
     """
     POST /api/bundle-generate/recommend/
@@ -101,3 +112,55 @@ class GenerateFromProductView(APIView):
         # Serialize and return
         serializer = OutfitBundleSerializer(generated_bundles, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+class GenerateFromWardrobeItemView(APIView):
+    """
+    POST /api/bundle-generate/recommend-from-wardrobe/
+    Payload: {"item_id": "...", "user_id": "..."}
+    Generates bundles centering around the user's selected wardrobe item, filling the rest from merchant products.
+    """
+    def post(self, request):
+        data = request.data
+        item_id = data.get('item_id')
+        user_id = data.get('user_id')
+
+        if not item_id or not user_id:
+            return Response({"detail": "item_id and user_id are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Get the selected wardrobe item
+        selected_wardrobe_item = get_object_or_404(WardrobeItem, item_id=item_id, user_id=user_id)
+
+        # Determine missing categories (Top, Bottom, Footwear)
+        required_categories = {Category.TOP, Category.BOTTOM, Category.FOOTWEAR}
+        missing_categories = required_categories - {selected_wardrobe_item.category}
+
+        # Fetch candidate products from the missing categories
+        candidate_products = MerchantProduct.objects.filter(category__in=missing_categories)
+        
+        # Convert candidates to WardrobeItems (in-memory)
+        candidate_items = [map_merchant_to_wardrobe_item(p) for p in candidate_products]
+
+        # The initial pool for the engine contains ONLY the selected item for its category,
+        # ensuring the engine MUST use it to form a valid bundle.
+        wardrobe_items = [selected_wardrobe_item] + candidate_items
+
+        # Fetch user preferences
+        avoided_colors = []
+        try:
+            user_profile = UserProfile.objects.get(user_id=user_id)
+            avoided_colors = user_profile.avoided_colors or []
+        except UserProfile.DoesNotExist:
+            pass
+
+        # Generate bundles
+        generated_bundles = generate_bundles(
+            user_id=user_id,
+            wardrobe_items=wardrobe_items,
+            occasion_filter=None, 
+            avoided_colors=avoided_colors
+        )
+
+        # Serialize and return
+        serializer = OutfitBundleSerializer(generated_bundles, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
