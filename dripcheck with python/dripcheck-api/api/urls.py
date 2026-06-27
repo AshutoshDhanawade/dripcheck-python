@@ -5,13 +5,20 @@ from .views import (
     UserProfileDetailView,
     AnalyticsView,
     WearLogView,
+    FrontendLogView,
 )
+from .views_upload import UploadProductView, ApproveProductView
+from .views_avatar import GenerateAvatarView
 # Bundle & Marketplace views are now served from the converted DRF module
 from bundlegeneration import BundleListView, SaveBundleView, MarketplaceView
 
 urlpatterns = [
     # ── Wardrobe ──────────────────────────────────────────────────────────────
+    path('wardrobe/upload-product', UploadProductView.as_view(), name='wardrobe-upload-product'),
+    path('wardrobe/approve-product', ApproveProductView.as_view(), name='wardrobe-approve-product'),
+    path('wardrobe/generate-avatar', GenerateAvatarView.as_view(), name='wardrobe-generate-avatar'),
     path('wardrobe/<str:user_id>', WardrobeListCreateView.as_view(), name='wardrobe-list-create'),
+
     path('wardrobe/<str:user_id>/<str:item_id>', WardrobeDetailView.as_view(), name='wardrobe-detail'),
 
     # ── User Profile ──────────────────────────────────────────────────────────
@@ -29,4 +36,7 @@ urlpatterns = [
 
     # ── Marketplace (converted from FastAPI → DRF) ────────────────────────────
     path('marketplace', MarketplaceView.as_view(), name='marketplace'),
+
+    # ── Frontend Logs ─────────────────────────────────────────────────────────
+    path('logs', FrontendLogView.as_view(), name='frontend-logs'),
 ]

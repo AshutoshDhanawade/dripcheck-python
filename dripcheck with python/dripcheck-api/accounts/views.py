@@ -29,7 +29,8 @@ class SignupView(APIView):
                 mobile_no = serializer.validated_data['mobile_no']
                 
                 # Generate a 6-digit OTP
-                otp = str(random.randint(100000, 999999))
+                otp = str(random.randint(1000, 9999))
+                print("otp",otp)
                 
                 # Save OTP to database
                 OTPRecord.objects.create(mobile_no=mobile_no, otp=otp)
