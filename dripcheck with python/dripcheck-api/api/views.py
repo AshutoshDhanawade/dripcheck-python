@@ -135,3 +135,41 @@ class WearLogView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
+import logging
+
+frontend_logger = logging.getLogger('frontend')
+
+class FrontendLogView(APIView):
+    """
+    POST /api/logs
+    Accepts frontend logs and prints/records them in the backend.
+    """
+    def post(self, request):
+        level = request.data.get('level', 'info').lower()
+        message = request.data.get('message', '')
+        url = request.data.get('url', '')
+        stack = request.data.get('stack', '')
+        
+        # Configure logger dynamically if no handlers exist
+        if not frontend_logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            frontend_logger.addHandler(handler)
+        frontend_logger.setLevel(logging.INFO)
+        
+        log_msg = f"[Frontend {level.upper()}] Url: {url} | Message: {message}"
+        if stack:
+            log_msg += f"\nStack: {stack}"
+            
+        if level == 'error':
+            frontend_logger.error(log_msg)
+        elif level == 'warn':
+            frontend_logger.warning(log_msg)
+        else:
+            frontend_logger.info(log_msg)
+            
+        return Response({"status": "logged"}, status=status.HTTP_200_OK)
+
+

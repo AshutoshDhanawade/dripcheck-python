@@ -48,6 +48,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    'dripcheck_django.middleware.RequestLoggingMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -126,6 +127,10 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Media files (User uploaded uploads)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 AUTH_USER_MODEL = 'accounts.User'
 
 REST_FRAMEWORK = {
@@ -139,3 +144,101 @@ TWILIO_ACCOUNT_SID = config('TWILIO_ACCOUNT_SID', default='your_twilio_account_s
 TWILIO_AUTH_TOKEN = config('TWILIO_AUTH_TOKEN', default='your_twilio_auth_token')
 TWILIO_PHONE_NUMBER = config('TWILIO_PHONE_NUMBER', default='your_twilio_phone_number')
 
+# Gemini API Settings
+GEMINI_API_KEY = config('GEMINI_API_KEY')
+
+# Hugging Face API Settings (FLUX.2-klein-9B Avatar Generation)
+HF_API_TOKEN = config('HF_API_TOKEN', default='')
+HF_MODEL_ID = config('HF_MODEL_ID', default='black-forest-labs/FLUX.2-klein-9B')
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+# Routes all project loggers (api, services, engine, etc.) to the console.
+# Django's default config only shows ERROR — this adds INFO and WARNING too.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+
+    'formatters': {
+        'verbose': {
+            'format': '\033[36m{asctime}\033[0m \033[1m{levelname:<8}\033[0m \033[33m{name}\033[0m  {message}',
+            'style': '{',
+            'datefmt': '%H:%M:%S',
+        },
+        'simple': {
+            'format': '{asctime} {levelname:<8} {name}  {message}',
+            'style': '{',
+            'datefmt': '%H:%M:%S',
+        },
+    },
+
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+            'level': 'DEBUG',
+        },
+    },
+
+    'loggers': {
+        # ── Django internals ──────────────────────────────────────────────────
+        'django': {
+            'handlers': ['console'],
+            'level': 'WARNING',       # Only show Django warnings/errors (not every ORM query)
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',         # Show 500s in the console
+            'propagate': False,
+        },
+
+        # ── Our app modules ───────────────────────────────────────────────────
+        'api': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'services': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'engine': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'accounts': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'bundle_generate': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'bundlegeneration': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'dripcheck_django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        # ── Frontend logs (from FrontendLogView) ──────────────────────────────
+        'frontend': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        # ── Root fallback: catches anything not matched above ─────────────────
+        '': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
+}

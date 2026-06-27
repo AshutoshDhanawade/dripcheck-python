@@ -104,8 +104,14 @@ class WardrobeItem(models.Model):
     aesthetic_tone = models.CharField(max_length=255, null=True, blank=True)
     wear_count = models.IntegerField(default=0)
     last_worn = models.CharField(max_length=100, null=True, blank=True)
-    image_url = models.URLField(max_length=1000, null=True, blank=True)
+    image_url = models.CharField(max_length=1000, null=True, blank=True)
+    original_image = models.CharField(max_length=1000, null=True, blank=True)
+    processed_image = models.CharField(max_length=1000, null=True, blank=True)
+    ai_generated = models.BooleanField(default=False)
+    fallback_used = models.BooleanField(default=False)
     added_at = models.CharField(max_length=100)
+
+
 
 class OutfitBundle(models.Model):
     bundle_id = models.CharField(max_length=255, primary_key=True)
