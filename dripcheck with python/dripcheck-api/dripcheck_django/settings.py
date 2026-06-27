@@ -147,9 +147,10 @@ TWILIO_PHONE_NUMBER = config('TWILIO_PHONE_NUMBER', default='your_twilio_phone_n
 # Gemini API Settings
 GEMINI_API_KEY = config('GEMINI_API_KEY')
 
-# Hugging Face API Settings (FLUX.2-klein-9B Avatar Generation)
+# Hugging Face avatar generation settings
 HF_API_TOKEN = config('HF_API_TOKEN', default='')
-HF_MODEL_ID = config('HF_MODEL_ID', default='black-forest-labs/FLUX.2-klein-9B')
+HF_MODEL_ID = config('HF_MODEL_ID', default='Qwen/Qwen-Image-Edit')
+HF_GENERATION_BACKEND = config('HF_GENERATION_BACKEND', default='diffusers')
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 # Routes all project loggers (api, services, engine, etc.) to the console.
