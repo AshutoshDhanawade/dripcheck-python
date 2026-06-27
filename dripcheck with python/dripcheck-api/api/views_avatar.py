@@ -8,8 +8,8 @@ Flow:
   2. Map the uploaded item to the compatibility engine's WardrobeItem format
   3. Query DB for wardrobe items in the OTHER categories
   4. Run the compatibility engine to find the best-matching bundle
-  5. Build a FLUX prompt (using user profile attributes if available)
-  6. Call FLUX.2-klein-9B via HuggingFace Inference API
+  5. Build a Qwen Image Edit prompt (using user profile attributes if available)
+  6. Call Qwen/Qwen-Image-Edit via Hugging Face Diffusers
   7. Save avatar to media/avatars/
   8. Return avatar_url + bundle details + compatibility score
 """
@@ -30,6 +30,7 @@ from engine.compatibility_engine import (
     calculate_compatibility_score,
     assign_style_tags,
     compute_dominant_color,
+    recommend_bundle_for_anchor,
 )
 from services import gemini_service, huggingface_service
 
@@ -188,95 +189,94 @@ class GenerateAvatarView(APIView):
         )
 
         # ── 6. Find best-matching bundle via compatibility engine ─────────────
-        best_bundle_items = []
-        best_score        = 0
+        best_score        = 0.0
         best_style_tags   = []
         best_dominant     = {'color': color, 'palette': metadata.get('color_family', 'Neutral')}
         best_occasion     = metadata.get('occasion_type', ['Casual'])
+        recommended_bundle = {
+            'topwear': None,
+            'bottomwear': None,
+            'footwear': None,
+            'outerwear': None,
+        }
+        best_bundle_items = []
+
+        # Allow optional onboarding metadata to influence the prompt, not the core engine.
+        gender          = request.data.get('gender', '').strip()
+        age             = request.data.get('age', '').strip()
+        preferred_style = request.data.get('preferred_style', '').strip()
+        occasion_pref   = request.data.get('occasion', '').strip()
+        season_pref     = request.data.get('season', '').strip()
+        budget          = request.data.get('budget', '').strip()
 
         if db_items:
-            # Group DB items by category
-            grouped: dict[str, list[WardrobeItem]] = {}
-            for item in db_items:
-                grouped.setdefault(item.category, []).append(item)
+            recommendation = recommend_bundle_for_anchor(uploaded_fake, db_items)
+            if recommendation['has_recommendations']:
+                best_bundle_items = recommendation['items']
+                best_score        = recommendation['matching_score'] * 100
+                for slot, item in recommendation['recommended_bundle'].items():
+                    recommended_bundle[slot] = item
 
-            # Build all combinations: uploaded item + one from each needed category
-            # We'll iterate smartly to limit explosion: take top 5 per category
-            MAX_PER_CAT = 5
-            trimmed_grouped = {cat: items[:MAX_PER_CAT] for cat, items in grouped.items()}
-
-            def _iter_combos(needed: list[str], so_far: list):
-                """Yield all combinations by picking one item from each needed category."""
-                if not needed:
-                    yield so_far
-                    return
-                cat = needed[0]
-                candidates = trimmed_grouped.get(cat, [])
-                if not candidates:
-                    # Category missing from DB — skip it, we'll use text fallback
-                    yield from _iter_combos(needed[1:], so_far)
-                    return
-                for item in candidates:
-                    yield from _iter_combos(needed[1:], so_far + [item])
-
-            for combo in _iter_combos(needed_categories, [uploaded_fake]):
-                if len(combo) < 2:
-                    continue
-                eval_result = calculate_compatibility_score(combo)
-                if eval_result.get('is_valid') and eval_result['score'] > best_score:
-                    best_score        = eval_result['score']
-                    best_bundle_items = combo
-
-            if best_bundle_items:
                 dom = compute_dominant_color(best_bundle_items)
                 best_dominant   = dom
                 tags_result     = assign_style_tags(best_bundle_items)
                 best_style_tags = [t['name'] for t in tags_result[:3]]
-                # Collect occasion tags
                 occ_set = set()
                 for itm in best_bundle_items:
                     occ_set.update(getattr(itm, 'occasion_type', []) or [])
                 best_occasion = list(occ_set)
 
         # Serialise bundle for response (exclude the uploaded fake item — include real DB items only)
-        real_bundle_items = [
-            i for i in best_bundle_items
-            if isinstance(i, WardrobeItem)
-        ]
-        bundle_dicts = [_item_to_dict(i) for i in real_bundle_items]
+        bundle_dicts = {}
+        for slot, item in recommended_bundle.items():
+            bundle_dicts[slot] = _item_to_dict(item) if isinstance(item, WardrobeItem) else None
 
-        # ── 7. Fetch user profile for avatar persona ──────────────────────────
-        user_profile_dict = None
+        # ── 7. Build Qwen Image Edit prompt for avatar generation ──────────────
+        qwen_prompt = huggingface_service.build_avatar_prompt(
+            uploaded_item_desc = uploaded_item_desc,
+            uploaded_category  = db_category,
+            recommended_bundle = bundle_dicts,
+            user_profile       = {
+                'gender': gender,
+                'age': age,
+                'preferred_style': preferred_style,
+                'occasion': occasion_pref,
+                'season': season_pref,
+                'budget': budget,
+                'skin_tone':  None,
+                'hair_color': None,
+                'body_type':  None,
+                'style_vibes': [],
+            }
+        )
+
         try:
             profile = UserProfile.objects.get(user_id=user_id)
-            user_profile_dict = {
-                'skin_tone':  profile.skin_tone,
-                'hair_color': profile.hair_color,
-                'body_type':  profile.body_type,
-            }
+            qwen_prompt = huggingface_service.build_avatar_prompt(
+                uploaded_item_desc = uploaded_item_desc,
+                uploaded_category  = db_category,
+                recommended_bundle = bundle_dicts,
+                user_profile       = {
+                    'gender': gender,
+                    'age': age,
+                    'preferred_style': preferred_style,
+                    'occasion': occasion_pref,
+                    'season': season_pref,
+                    'budget': budget,
+                    'skin_tone':  profile.skin_tone,
+                    'hair_color': profile.hair_color,
+                    'body_type':  profile.body_type,
+                    'style_vibes': profile.style_vibes or [],
+                }
+            )
         except UserProfile.DoesNotExist:
             pass
 
-        # ── 8. Build FLUX prompt ───────────────────────────────────────────────
-        bundle_dicts_for_prompt = [
-            {
-                'name':          i.name,
-                'category':      i.category,
-                'primary_color': i.primary_color,
-                'fit':           i.fit,
-            }
-            for i in real_bundle_items
-        ]
-
-        flux_prompt = huggingface_service.build_avatar_prompt(
-            uploaded_item_desc = uploaded_item_desc,
-            uploaded_category  = db_category,
-            bundle_items       = bundle_dicts_for_prompt,
-            user_profile       = user_profile_dict,
+        # ── 8. Call Qwen avatar generation ─────────────────────────────────────
+        avatar_bytes = huggingface_service.generate_avatar_image(
+            qwen_prompt,
+            image_bytes=image_bytes,
         )
-
-        # ── 9. Call FLUX.2-klein-9B ────────────────────────────────────────────
-        avatar_bytes    = huggingface_service.generate_avatar_image(flux_prompt)
         avatar_generated = avatar_bytes is not None
 
         avatar_url = None
@@ -285,7 +285,7 @@ class GenerateAvatarView(APIView):
             avatars_dir = os.path.join(settings.MEDIA_ROOT, 'avatars')
             os.makedirs(avatars_dir, exist_ok=True)
 
-            avatar_filename = f"avatar_{uuid.uuid4()}.jpg"
+            avatar_filename = f"avatar_{uuid.uuid4()}.png"
             avatar_path     = os.path.join(avatars_dir, avatar_filename)
 
             try:
@@ -312,16 +312,20 @@ class GenerateAvatarView(APIView):
             'occasion_type':  metadata.get('occasion_type', ['Casual']),
         }
 
+        matching_score = round(best_score / 100, 2)
+
         return Response({
             "success":            True,
-            "avatar_url":         avatar_url,
+            "avatar_image_url":   avatar_url,
             "avatar_generated":   avatar_generated,
-            "bundle":             bundle_dicts,
+            "recommended_bundle": bundle_dicts,
             "uploaded_item":      uploaded_item_out,
             "compatibility_score": round(best_score, 1),
+            "matching_score":     matching_score,
             "style_tags":         best_style_tags,
             "dominant_color":     best_dominant.get('color', color),
             "dominant_palette":   best_dominant.get('palette', 'Neutral'),
             "occasion_tags":      best_occasion,
-            "prompt_used":        flux_prompt,
+            "generation_prompt":  qwen_prompt,
+            "prompt_used":        qwen_prompt,
         }, status=status.HTTP_200_OK)

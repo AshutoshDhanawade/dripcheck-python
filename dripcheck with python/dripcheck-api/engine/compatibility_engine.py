@@ -440,3 +440,97 @@ def generate_bundles(
         ))
 
     return bundles
+
+
+def recommend_bundle_for_anchor(
+    anchor_item: WardrobeItem,
+    wardrobe_items: List[WardrobeItem],
+    max_per_category: int = 6
+) -> dict:
+    """Find the strongest outfit bundle anchored on a user-uploaded item.
+
+    Reuses the existing compatibility scoring engine to keep recommendation logic
+    consistent with the rest of the application.
+    """
+    complement_map = {
+        'Top': ['Bottom', 'Footwear'],
+        'Bottom': ['Top', 'Footwear'],
+        'Footwear': ['Top', 'Bottom'],
+    }
+    required_categories = complement_map.get(anchor_item.category, ['Top', 'Bottom', 'Footwear'])
+    optional_category = 'Layer'
+
+    categories = required_categories + [optional_category]
+    grouped: dict[str, list[WardrobeItem]] = {}
+    for cat in categories:
+        grouped[cat] = [item for item in wardrobe_items if item.category == cat][:max_per_category]
+
+    def iter_combinations(categories_left: list[str], current: list[WardrobeItem]):
+        if not categories_left:
+            yield current
+            return
+
+        category = categories_left[0]
+        candidates = grouped.get(category, [])
+        if not candidates:
+            yield from iter_combinations(categories_left[1:], current)
+            return
+
+        for item in candidates:
+            yield from iter_combinations(categories_left[1:], current + [item])
+
+    best_bundle = None
+    best_score = 0
+    best_items = []
+    all_valid_combos = []
+
+    for combo in iter_combinations(required_categories, [anchor_item]):
+        if len(combo) != len(required_categories) + 1:
+            continue
+        result = calculate_compatibility_score(combo)
+        if not result['is_valid']:
+            continue
+        all_valid_combos.append((result['score'], combo))
+
+        # Try optional layer if available
+        for layer_item in grouped.get(optional_category, []):
+            layered_combo = combo + [layer_item]
+            layered_result = calculate_compatibility_score(layered_combo)
+            if layered_result['is_valid']:
+                all_valid_combos.append((layered_result['score'], layered_combo))
+
+    if not all_valid_combos:
+        return {
+            'recommended_bundle': {},
+            'matching_score': 0.0,
+            'items': [],
+            'has_recommendations': False,
+        }
+
+    best_score, best_items = max(all_valid_combos, key=lambda pair: pair[0])
+
+    bundle = {
+        'topwear': None,
+        'bottomwear': None,
+        'footwear': None,
+        'outerwear': None,
+    }
+
+    category_key_map = {
+        'Top': 'topwear',
+        'Bottom': 'bottomwear',
+        'Footwear': 'footwear',
+        'Layer': 'outerwear',
+    }
+
+    for item in best_items:
+        slot = category_key_map.get(item.category)
+        if slot:
+            bundle[slot] = item
+
+    return {
+        'recommended_bundle': bundle,
+        'matching_score': round(best_score / 100, 2),
+        'items': best_items,
+        'has_recommendations': True,
+    }
