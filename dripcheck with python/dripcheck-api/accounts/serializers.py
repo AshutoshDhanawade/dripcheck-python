@@ -8,16 +8,18 @@ class SignupSerializer(serializers.Serializer):
     mobile_no = serializers.CharField()
 
     def validate_mobile_no(self, value):
-        # Allow passing the country code, assuming '+' is present. If not, default handling can be added.
         if not value.startswith('+'):
             raise serializers.ValidationError("Mobile number must start with a country code (e.g. +91).")
-        
+
         try:
             parsed_number = phonenumbers.parse(value)
             if not phonenumbers.is_valid_number(parsed_number):
                 raise serializers.ValidationError("Invalid mobile number format.")
         except phonenumbers.NumberParseException:
             raise serializers.ValidationError("Invalid mobile number format.")
+
+        if User.objects.filter(mobile_no=value).exists():
+            raise serializers.ValidationError("User already exists. Please try another number.")
 
         return value
 

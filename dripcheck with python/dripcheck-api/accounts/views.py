@@ -1,13 +1,14 @@
-from rest_framework.permissions import AllowAny
 import random
 from django.conf import settings
 from twilio.rest import Client
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.authtoken.models import Token
-from .serializers import SignupSerializer, VerifyOTPSerializer, LoginSerializer
-from .models import User, OTPRecord
+from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.tokens import RefreshToken
+from .authentication import BearerTokenAuthentication
+from .serializers import SignupSerializer, VerifyOTPSerializer, LoginSerializer, OnboardingQuestionSerializer, OnboardingSubmitSerializer
+from .models import User, OTPRecord, OnboardingQuestion, UserOnboardingResponse
 from api.models import WardrobeItem
 from api.serializers import WardrobeItemSerializer
 from bundle_generate.models import MerchantProduct
@@ -21,16 +22,26 @@ def get_client_ip(request):
         ip = request.META.get('REMOTE_ADDR')
     return ip
 
+
+def normalize_boolean_answer(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() == 'true'
+    return False
+
 class SignupView(APIView):
     def post(self, request):
         try:
             serializer = SignupSerializer(data=request.data)
             if serializer.is_valid():
                 mobile_no = serializer.validated_data['mobile_no']
-                
+
                 # Generate a 6-digit OTP
                 otp = str(random.randint(1000, 9999))
-                print("otp",otp)
+                print("otp", otp)
                 
                 # Save OTP to database
                 OTPRecord.objects.create(mobile_no=mobile_no, otp=otp)
@@ -68,21 +79,39 @@ class VerifyOTPView(APIView):
                 # Get the user's IP address
                 ip_address = get_client_ip(request)
                 
-                # Create or update user
                 user, created = User.objects.get_or_create(
                     mobile_no=mobile_no,
                     defaults={'ip_address': ip_address, 'is_active': True}
                 )
-                
+
                 if not created:
                     user.is_active = True
                     user.ip_address = ip_address
                     user.save()
 
+                refresh = RefreshToken.for_user(user)
+                access_token = str(refresh.access_token)
+
                 # Delete used OTP
                 OTPRecord.objects.filter(mobile_no=mobile_no).delete()
-                
-                return Response({"message": "Registration complete. User verified."}, status=status.HTTP_200_OK)
+
+                response_data = {
+                    "message": "Registration complete. User verified.",
+                    "user_id": user.id,
+                    "show_onboarding": not user.is_onboarded,
+                }
+
+                # Include stored details if present
+                response_data["access_token"] = access_token
+                response_data["refresh_token"] = str(refresh)
+                response_data["token"] = access_token
+
+                if user.full_name:
+                    response_data["full_name"] = user.full_name
+                if user.email:
+                    response_data["email"] = user.email
+
+                return Response(response_data, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response(
@@ -98,15 +127,24 @@ class LoginView(APIView):
                 mobile_no = serializer.validated_data['mobile_no']
                 user = User.objects.get(mobile_no=mobile_no)
                 
-                # Generate or get existing token
-                token, created = Token.objects.get_or_create(user=user)
-                
                 response_data = {
-                    "token": token.key,
                     "message": "Login successful.",
                     "is_new_user": not user.is_onboarded,
+                    "show_onboarding": not user.is_onboarded,
+                    "user_id": user.id,
                     "wardrobe": []
                 }
+
+                refresh = RefreshToken.for_user(user)
+                response_data["access_token"] = str(refresh.access_token)
+                response_data["refresh_token"] = str(refresh)
+                response_data["token"] = response_data["access_token"]
+
+                # Include stored user details when available
+                if user.full_name:
+                    response_data["full_name"] = user.full_name
+                if user.email:
+                    response_data["email"] = user.email
                 
                 wardrobe_empty = True
                 if user.is_onboarded:
@@ -121,6 +159,10 @@ class LoginView(APIView):
                     product_serializer = MerchantProductSerializer(products, many=True)
                     response_data["best_selling_products"] = product_serializer.data
                 
+                # If user already onboarded, frontend can redirect to homepage
+                if user.is_onboarded:
+                    response_data["redirect_url"] = "/"
+
                 return Response(response_data, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -129,17 +171,28 @@ class LoginView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-from rest_framework.permissions import IsAuthenticated
-from .models import OnboardingQuestion, UserOnboardingResponse
-from .serializers import OnboardingQuestionSerializer, OnboardingSubmitSerializer
-
 class OnboardingQuestionsView(APIView):
+    authentication_classes = [BearerTokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
+            if hasattr(request, 'user') and getattr(request.user, 'is_onboarded', False):
+                return Response({"message": "User already onboarded."}, status=status.HTTP_400_BAD_REQUEST)
+
             questions = OnboardingQuestion.objects.filter(is_active=True).order_by('order')
-            serializer = OnboardingQuestionSerializer(questions, many=True)
+            existing_responses = {}
+            onboarding_response = getattr(request.user, 'onboarding_response', None)
+            if onboarding_response and onboarding_response.responses:
+                existing_responses = onboarding_response.responses
+
+            pending_questions = []
+            for question in questions:
+                answer = existing_responses.get(str(question.id), None)
+                if answer is None or not normalize_boolean_answer(answer):
+                    pending_questions.append(question)
+
+            serializer = OnboardingQuestionSerializer(pending_questions, many=True)
             return Response({"questions": serializer.data}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
@@ -148,10 +201,16 @@ class OnboardingQuestionsView(APIView):
             )
 
 class OnboardingSubmitView(APIView):
+    authentication_classes = [BearerTokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         try:
+            # Prevent re-submission if already onboarded
+            user = request.user
+            if getattr(user, 'is_onboarded', False):
+                return Response({"message": "User already onboarded."}, status=status.HTTP_400_BAD_REQUEST)
+
             serializer = OnboardingSubmitSerializer(data=request.data)
             if serializer.is_valid():
                 responses = serializer.validated_data['responses']
@@ -163,17 +222,33 @@ class OnboardingSubmitView(APIView):
                     user.full_name = full_name
                 if email:
                     user.email = email
-                
-                user.is_onboarded = True
-                user.save()
 
-                # Save or update responses
+                normalized_responses = {}
+                for question_id, answer in responses.items():
+                    normalized_responses[str(question_id)] = normalize_boolean_answer(answer)
+
                 UserOnboardingResponse.objects.update_or_create(
                     user=user,
-                    defaults={'responses': responses}
+                    defaults={'responses': normalized_responses}
                 )
 
-                return Response({"message": "Onboarding completed successfully."}, status=status.HTTP_200_OK)
+                questions = OnboardingQuestion.objects.filter(is_active=True).order_by('order')
+                all_answers_true = True
+                if questions.exists():
+                    for question in questions:
+                        answer = normalized_responses.get(str(question.id), False)
+                        if not answer:
+                            all_answers_true = False
+                            break
+
+                user.is_onboarded = all_answers_true
+                user.save()
+
+                return Response({
+                    "message": "Onboarding updated successfully." if not all_answers_true else "Onboarding completed successfully.",
+                    "show_onboarding": not all_answers_true,
+                    "user_id": user.id,
+                }, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response(
