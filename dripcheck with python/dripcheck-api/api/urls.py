@@ -7,7 +7,7 @@ from .views import (
     WearLogView,
     FrontendLogView,
 )
-from .views_upload import UploadProductView, ApproveProductView
+from .views_upload import AddProductLinkView, UploadProductView, ApproveProductView
 from .views_avatar import GenerateAvatarView
 # Bundle & Marketplace views are now served from the converted DRF module
 from bundlegeneration import BundleListView, SaveBundleView, MarketplaceView
@@ -15,6 +15,7 @@ from bundlegeneration import BundleListView, SaveBundleView, MarketplaceView
 urlpatterns = [
     # ── Wardrobe ──────────────────────────────────────────────────────────────
     path('wardrobe/upload-product', UploadProductView.as_view(), name='wardrobe-upload-product'),
+    path('wardrobe/add-product-link', AddProductLinkView.as_view(), name='wardrobe-add-product-link'),
     path('wardrobe/approve-product', ApproveProductView.as_view(), name='wardrobe-approve-product'),
     path('wardrobe/generate-avatar', GenerateAvatarView.as_view(), name='wardrobe-generate-avatar'),
     path('wardrobe/<str:user_id>', WardrobeListCreateView.as_view(), name='wardrobe-list-create'),

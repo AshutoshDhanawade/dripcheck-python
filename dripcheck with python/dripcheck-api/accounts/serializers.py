@@ -76,6 +76,7 @@ class OnboardingSubmitSerializer(serializers.Serializer):
     responses = serializers.JSONField(help_text="JSON payload mapping question text or ID to the user's answer.")
     full_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     email = serializers.EmailField(required=False, allow_blank=True)
+    mobile_no = serializers.CharField(max_length=20, required=False, allow_blank=True)
 
     def validate_responses(self, value):
         if not isinstance(value, dict):

@@ -88,9 +88,14 @@ WSGI_APPLICATION = 'dripcheck_django.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+#DATABASES = {
+#    "default": dj_database_url.parse(os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/db.sqlite3"))
+#}
+
 DATABASES = {
     "default": dj_database_url.parse(os.getenv("DATABASE_URL"))
 }
+print("DATABASES",DATABASES)
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 

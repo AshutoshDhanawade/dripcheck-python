@@ -93,3 +93,12 @@ class UserOnboardingResponse(models.Model):
 
     def __str__(self):
         return f"Onboarding Response for {self.user.mobile_no}"
+
+class UserToken(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tokens')
+    access_token = models.TextField()
+    refresh_token = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Token for {self.user.mobile_no}"
