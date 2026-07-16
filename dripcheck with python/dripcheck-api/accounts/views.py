@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from .authentication import BearerTokenAuthentication
 from .serializers import SignupSerializer, VerifyOTPSerializer, LoginSerializer, OnboardingQuestionSerializer, OnboardingSubmitSerializer
-from .models import User, OTPRecord, OnboardingQuestion, UserOnboardingResponse
+from .models import User, OTPRecord, OnboardingQuestion, UserOnboardingResponse, UserToken
 from api.models import WardrobeItem
 from api.serializers import WardrobeItemSerializer
 from bundle_generate.models import MerchantProduct
@@ -31,6 +31,52 @@ def normalize_boolean_answer(value):
     if isinstance(value, str):
         return value.strip().lower() == 'true'
     return False
+
+
+ONBOARDING_RESPONSE_FIELD_ORDERS = {
+    'styles': 1,
+    'clothes': 2,
+    'colors': 3,
+    'goal': 4,
+    'buyingFrequency': 5,
+}
+
+PROFILE_RESPONSE_FIELDS = {'fullName', 'full_name', 'username', 'email'}
+
+
+def simplify_onboarding_answer(value):
+    if isinstance(value, list):
+        return [simplify_onboarding_answer(item) for item in value]
+    if isinstance(value, dict):
+        for key in ('label', 'value', 'text', 'name'):
+            answer = value.get(key)
+            if answer not in (None, ''):
+                return answer
+    return value
+
+
+def build_question_answer_responses(responses, answer_mapper=simplify_onboarding_answer):
+    questions = OnboardingQuestion.objects.filter(is_active=True).order_by('order')
+    questions_by_id = {str(question.id): question for question in questions}
+    questions_by_text = {question.text: question for question in questions}
+    questions_by_order = {question.order: question for question in questions}
+
+    formatted_responses = {}
+    for key, answer in responses.items():
+        response_key = str(key)
+        if response_key in PROFILE_RESPONSE_FIELDS:
+            continue
+
+        question = (
+            questions_by_id.get(response_key)
+            or questions_by_text.get(response_key)
+            or questions_by_order.get(ONBOARDING_RESPONSE_FIELD_ORDERS.get(response_key))
+        )
+
+        formatted_key = question.text if question else response_key
+        formatted_responses[formatted_key] = answer_mapper(answer)
+
+    return formatted_responses
 
 class SignupView(APIView):
     def post(self, request):
@@ -90,7 +136,13 @@ class VerifyOTPView(APIView):
                     user.save()
 
                 refresh = RefreshToken.for_user(user)
-                access_token = str(refresh.access_token)
+
+                # Store tokens in new data table
+                UserToken.objects.create(
+                    user=user,
+                    access_token=str(refresh.access_token),
+                    refresh_token=str(refresh)
+                )
 
                 # Delete used OTP
                 OTPRecord.objects.filter(mobile_no=mobile_no).delete()
@@ -100,11 +152,14 @@ class VerifyOTPView(APIView):
                     "user_id": user.id,
                     "show_onboarding": not user.is_onboarded,
                 }
+                
+                # If user already onboarded, frontend can redirect to homepage
+                if user.is_onboarded:
+                    response_data["redirect_url"] = "/"
+                else:
+                    response_data["redirect_url"] = "/onboarding"
 
                 # Include stored details if present
-                response_data["access_token"] = access_token
-                response_data["refresh_token"] = str(refresh)
-                response_data["token"] = access_token
 
                 if user.full_name:
                     response_data["full_name"] = user.full_name
@@ -132,13 +187,16 @@ class LoginView(APIView):
                     "is_new_user": not user.is_onboarded,
                     "show_onboarding": not user.is_onboarded,
                     "user_id": user.id,
-                    "wardrobe": []
                 }
 
                 refresh = RefreshToken.for_user(user)
-                response_data["access_token"] = str(refresh.access_token)
-                response_data["refresh_token"] = str(refresh)
-                response_data["token"] = response_data["access_token"]
+                
+                # Store tokens in new data table
+                UserToken.objects.create(
+                    user=user,
+                    access_token=str(refresh.access_token),
+                    refresh_token=str(refresh)
+                )
 
                 # Include stored user details when available
                 if user.full_name:
@@ -146,22 +204,30 @@ class LoginView(APIView):
                 if user.email:
                     response_data["email"] = user.email
                 
-                wardrobe_empty = True
-                if user.is_onboarded:
-                    wardrobe_items = WardrobeItem.objects.filter(user_id=mobile_no)
-                    if wardrobe_items.exists():
-                        wardrobe_serializer = WardrobeItemSerializer(wardrobe_items, many=True)
-                        response_data["wardrobe"] = wardrobe_serializer.data
-                        wardrobe_empty = False
-                        
-                if wardrobe_empty:
-                    products = MerchantProduct.objects.all().order_by('-sales_count')[:10]
-                    product_serializer = MerchantProductSerializer(products, many=True)
-                    response_data["best_selling_products"] = product_serializer.data
+                # Get onboarding questions and answers
+                questions = OnboardingQuestion.objects.filter(is_active=True).order_by('order')
+                onboarding_response = getattr(user, 'onboarding_response', None)
+                user_answers = onboarding_response.responses if onboarding_response else {}
+                
+                onboarding_data = []
+                for q in questions:
+                    options = [{"id": opt.id, "text": opt.text, "is_other": opt.is_other} for opt in q.options.all()]
+                    q_data = {
+                        "id": q.id,
+                        "question_text": q.text,
+                        "question_type": q.question_type,
+                        "options": options,
+                        "user_answer": user_answers.get(q.text, user_answers.get(str(q.id), None))
+                    }
+                    onboarding_data.append(q_data)
+                
+                response_data["onboarding_data"] = onboarding_data
                 
                 # If user already onboarded, frontend can redirect to homepage
                 if user.is_onboarded:
                     response_data["redirect_url"] = "/"
+                else:
+                    response_data["redirect_url"] = "/onboarding"
 
                 return Response(response_data, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -188,7 +254,7 @@ class OnboardingQuestionsView(APIView):
 
             pending_questions = []
             for question in questions:
-                answer = existing_responses.get(str(question.id), None)
+                answer = existing_responses.get(question.text, existing_responses.get(str(question.id), None))
                 if answer is None or not normalize_boolean_answer(answer):
                     pending_questions.append(question)
 
@@ -223,9 +289,10 @@ class OnboardingSubmitView(APIView):
                 if email:
                     user.email = email
 
-                normalized_responses = {}
-                for question_id, answer in responses.items():
-                    normalized_responses[str(question_id)] = normalize_boolean_answer(answer)
+                normalized_responses = build_question_answer_responses(
+                    responses,
+                    answer_mapper=normalize_boolean_answer
+                )
 
                 UserOnboardingResponse.objects.update_or_create(
                     user=user,
@@ -233,13 +300,15 @@ class OnboardingSubmitView(APIView):
                 )
 
                 questions = OnboardingQuestion.objects.filter(is_active=True).order_by('order')
-                all_answers_true = True
                 if questions.exists():
+                    all_answers_true = True
                     for question in questions:
-                        answer = normalized_responses.get(str(question.id), False)
+                        answer = normalized_responses.get(question.text, normalized_responses.get(str(question.id), False))
                         if not answer:
                             all_answers_true = False
                             break
+                else:
+                    all_answers_true = bool(normalized_responses) and all(normalized_responses.values())
 
                 user.is_onboarded = all_answers_true
                 user.save()
@@ -253,5 +322,59 @@ class OnboardingSubmitView(APIView):
         except Exception as e:
             return Response(
                 {"error": "An unexpected error occurred during onboarding submission.", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+class PublicOnboardingSubmitView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        try:
+            serializer = OnboardingSubmitSerializer(data=request.data)
+            if serializer.is_valid():
+                mobile_no = serializer.validated_data.get('mobile_no')
+                if not mobile_no:
+                    return Response({"error": "mobile_no is required."}, status=status.HTTP_400_BAD_REQUEST)
+                
+                try:
+                    user = User.objects.get(mobile_no=mobile_no)
+                except User.DoesNotExist:
+                    return Response({"error": "User with this mobile number does not exist."}, status=status.HTTP_404_NOT_FOUND)
+
+                if getattr(user, 'is_onboarded', False):
+                    return Response({"message": "User already onboarded."}, status=status.HTTP_400_BAD_REQUEST)
+
+                responses = serializer.validated_data['responses']
+                full_name = serializer.validated_data.get('full_name', '')
+                email = serializer.validated_data.get('email', '')
+
+                if full_name:
+                    user.full_name = full_name
+                if email:
+                    user.email = email
+
+                formatted_responses = build_question_answer_responses(responses)
+
+                UserOnboardingResponse.objects.update_or_create(
+                    user=user,
+                    defaults={'responses': formatted_responses}
+                )
+
+                # Assume onboarding is complete if submission is made
+                user.is_onboarded = True
+                user.save()
+
+                return Response({
+                    "message": "Onboarding completed successfully.",
+                    "show_onboarding": False,
+                    "user_id": user.id,
+                    "onboarding_data": formatted_responses,
+                    "redirect_url": "/"
+                }, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"error": "An unexpected error occurred during public onboarding submission.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

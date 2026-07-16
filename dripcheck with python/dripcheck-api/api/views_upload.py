@@ -10,6 +10,11 @@ from django.conf import settings
 from .models import WardrobeItem
 from .serializers import WardrobeItemSerializer
 from services import gemini_service
+from services.product_link_scraper import (
+    NotClothingProductError,
+    ProductScrapeError,
+    scrape_clothing_product,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,37 @@ CATEGORY_MAPPING = {
 def clean_category(cat_str: str) -> str:
     cleaned = cat_str.strip().lower()
     return CATEGORY_MAPPING.get(cleaned, 'Top')
+
+
+def build_wardrobe_item_payload(user_id, name, color, type_str, category_raw, metadata, image_url, source_url=None, fallback_used=True):
+    category = clean_category(category_raw)
+    return {
+        "item_id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "name": name or 'Wardrobe Item',
+        "category": category,
+        "subcategory": type_str or 'Clothing',
+        "primary_color": color or 'Other',
+        "secondary_color": metadata.get('secondary_color'),
+        "color_family": metadata.get('color_family', 'Neutral'),
+        "pattern": metadata.get('pattern', 'Solid'),
+        "fit": metadata.get('fit', 'Regular'),
+        "occasion_type": metadata.get('occasion_type', ['Casual']),
+        "season": metadata.get('season', 'All-season'),
+        "formality_level": metadata.get('formality_level', 5),
+        "brand": metadata.get('brand'),
+        "material": metadata.get('material'),
+        "style_tags": metadata.get('style_tags', []),
+        "mood_tags": metadata.get('mood_tags', []),
+        "aesthetic_tone": metadata.get('aesthetic_tone', ''),
+        "image_url": image_url,
+        "original_image": image_url,
+        "processed_image": image_url,
+        "ai_generated": False,
+        "fallback_used": fallback_used,
+        "added_at": datetime.utcnow().isoformat() + 'Z',
+        "wear_count": 0
+    }
 
 class UploadProductView(APIView):
     """
@@ -138,6 +174,70 @@ class UploadProductView(APIView):
         }
         
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+class AddProductLinkView(APIView):
+    """
+    POST /api/wardrobe/add-product-link
+
+    Accepts:
+      - url: Public product page link (compulsory)
+      - user_id: String (optional, default: user_demo)
+
+    Scrapes a clothing/apparel product page, validates that it is apparel, saves
+    the product image, infers wardrobe metadata, and creates the wardrobe item.
+    """
+    def post(self, request):
+        product_url = request.data.get('url')
+        user_id = request.data.get('user_id', 'user_demo')
+
+        if not product_url:
+            return Response({"success": False, "error": "Product link is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            scraped = scrape_clothing_product(product_url)
+        except NotClothingProductError as e:
+            return Response({"success": False, "error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except ProductScrapeError as e:
+            return Response({"success": False, "error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception(f"Unexpected product link scraping failure: {e}")
+            return Response({"success": False, "error": "Failed to process this product link."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        metadata = gemini_service.infer_metadata_locally(
+            scraped['name'],
+            scraped['color'],
+            scraped['type'],
+            scraped['category'],
+        )
+        if scraped.get('brand'):
+            metadata['brand'] = scraped['brand']
+        metadata['aesthetic_tone'] = metadata.get('aesthetic_tone') or f"Linked product from {scraped['source_url']}"
+
+        wardrobe_data = build_wardrobe_item_payload(
+            user_id=user_id,
+            name=scraped['name'],
+            color=scraped['color'],
+            type_str=scraped['type'],
+            category_raw=scraped['category'],
+            metadata=metadata,
+            image_url=scraped['image_url'],
+            source_url=scraped['source_url'],
+            fallback_used=True,
+        )
+
+        serializer = WardrobeItemSerializer(data=wardrobe_data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "success": True,
+                "message": "Product successfully added to wardrobe.",
+                "product": serializer.data,
+                "source_url": scraped['source_url'],
+            }, status=status.HTTP_201_CREATED)
+
+        logger.error(f"Serialization failed for linked WardrobeItem: {serializer.errors}")
+        return Response({"success": False, "error": "Database validation failed.", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
 class ApproveProductView(APIView):
     """
