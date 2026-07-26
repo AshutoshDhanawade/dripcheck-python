@@ -66,7 +66,7 @@ class StyleTag(models.TextChoices):
     DESIGNER = 'Designer', 'Designer'
 
 class UserProfile(models.Model):
-    user_id = models.CharField(max_length=255, primary_key=True)
+    user = models.ForeignKey('accounts.User', on_delete=models.CASCADE, null=True, blank=True)
     username = models.CharField(max_length=255)
     email = models.EmailField()
     skin_tone = models.CharField(max_length=100)
@@ -85,7 +85,7 @@ class UserProfile(models.Model):
 
 class WardrobeItem(models.Model):
     item_id = models.CharField(max_length=255, primary_key=True)
-    user_id = models.CharField(max_length=255)
+    user = models.ForeignKey('accounts.User', on_delete=models.CASCADE, null=True, blank=True)
     name = models.CharField(max_length=255)
     category = models.CharField(max_length=50, choices=Category.choices)
     subcategory = models.CharField(max_length=100)
@@ -107,6 +107,7 @@ class WardrobeItem(models.Model):
     image_url = models.CharField(max_length=1000, null=True, blank=True)
     original_image = models.CharField(max_length=1000, null=True, blank=True)
     processed_image = models.CharField(max_length=1000, null=True, blank=True)
+    product_url = models.CharField(max_length=2000, null=True, blank=True)
     ai_generated = models.BooleanField(default=False)
     fallback_used = models.BooleanField(default=False)
     added_at = models.CharField(max_length=100)
@@ -115,7 +116,7 @@ class WardrobeItem(models.Model):
 
 class OutfitBundle(models.Model):
     bundle_id = models.CharField(max_length=255, primary_key=True)
-    user_id = models.CharField(max_length=255)
+    user = models.ForeignKey('accounts.User', on_delete=models.CASCADE, null=True, blank=True)
     items = models.JSONField(default=list)
     compatibility_score = models.FloatField()
     dominant_color = models.CharField(max_length=100)
@@ -131,7 +132,7 @@ class OutfitBundle(models.Model):
 
 class WearLog(models.Model):
     log_id = models.CharField(max_length=255, primary_key=True)
-    user_id = models.CharField(max_length=255)
+    user = models.ForeignKey('accounts.User', on_delete=models.CASCADE, null=True, blank=True)
     bundle_id = models.CharField(max_length=255, null=True, blank=True)
     item_ids = models.JSONField(default=list)
     occasion_tag = models.CharField(max_length=100)

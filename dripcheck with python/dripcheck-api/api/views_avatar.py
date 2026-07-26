@@ -183,7 +183,7 @@ class GenerateAvatarView(APIView):
         needed_categories = COMPLEMENT_MAP.get(db_category, ['Top', 'Bottom', 'Footwear'])
         db_items = list(
             WardrobeItem.objects.filter(
-                user_id=user_id,
+                user__user_uid=user_id,
                 category__in=needed_categories
             )
         )
@@ -251,7 +251,7 @@ class GenerateAvatarView(APIView):
         )
 
         try:
-            profile = UserProfile.objects.get(user_id=user_id)
+            profile = UserProfile.objects.get(user__user_uid=user_id)
             qwen_prompt = huggingface_service.build_avatar_prompt(
                 uploaded_item_desc = uploaded_item_desc,
                 uploaded_category  = db_category,

@@ -1,3 +1,4 @@
+import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.utils import timezone
@@ -28,6 +29,7 @@ class CustomUserManager(BaseUserManager):
 
 class User(AbstractUser):
     username = None  # Remove username field
+    user_uid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     mobile_no = models.CharField(max_length=20, unique=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     is_active = models.BooleanField(default=False)

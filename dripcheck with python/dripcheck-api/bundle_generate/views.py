@@ -128,7 +128,7 @@ class GenerateFromWardrobeItemView(APIView):
             return Response({"detail": "item_id and user_id are required."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Get the selected wardrobe item
-        selected_wardrobe_item = get_object_or_404(WardrobeItem, item_id=item_id, user_id=user_id)
+        selected_wardrobe_item = get_object_or_404(WardrobeItem, item_id=item_id, user__user_uid=user_id)
 
         # Determine missing categories (Top, Bottom, Footwear)
         required_categories = {Category.TOP, Category.BOTTOM, Category.FOOTWEAR}

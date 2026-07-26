@@ -409,10 +409,9 @@ def generate_bundles(
                 })
 
     valid_combinations.sort(key=lambda x: x['score'], reverse=True)
-    top_10 = valid_combinations[:10]
 
     bundles = []
-    for combo in top_10:
+    for combo in valid_combinations:
         rand_str = ''.join(random.choices('0123456789abcdefghijklmnopqrstuvwxyz', k=7))
         occ_tags = list(set([occ for item in combo['items'] for occ in item.occasion_type]))
         if occasion_filter:
