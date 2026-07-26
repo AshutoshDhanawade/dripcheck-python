@@ -9,6 +9,8 @@ from rest_framework import status
 from django.conf import settings
 from .models import WardrobeItem
 from .serializers import WardrobeItemSerializer
+from accounts.models import User
+from django.shortcuts import get_object_or_404
 from services import gemini_service
 from services.product_link_scraper import (
     NotClothingProductError,
@@ -36,11 +38,11 @@ def clean_category(cat_str: str) -> str:
     return CATEGORY_MAPPING.get(cleaned, 'Top')
 
 
-def build_wardrobe_item_payload(user_id, name, color, type_str, category_raw, metadata, image_url, source_url=None, fallback_used=True):
+def build_wardrobe_item_payload(user, name, color, type_str, category_raw, metadata, image_url, source_url=None, fallback_used=True):
     category = clean_category(category_raw)
     return {
         "item_id": str(uuid.uuid4()),
-        "user_id": user_id,
+        "user": user.id,
         "name": name or 'Wardrobe Item',
         "category": category,
         "subcategory": type_str or 'Clothing',
@@ -60,6 +62,7 @@ def build_wardrobe_item_payload(user_id, name, color, type_str, category_raw, me
         "image_url": image_url,
         "original_image": image_url,
         "processed_image": image_url,
+        "product_url": source_url,
         "ai_generated": False,
         "fallback_used": fallback_used,
         "added_at": datetime.utcnow().isoformat() + 'Z',
@@ -87,6 +90,7 @@ class UploadProductView(APIView):
         type_str = request.data.get('type')
         category = request.data.get('category')
         user_id = request.data.get('user_id', 'user_demo')
+        product_url = request.data.get('product_url')
         
         # 1. Input validations
         if not image_file:
@@ -169,7 +173,8 @@ class UploadProductView(APIView):
                 "color": color,
                 "type": type_str,
                 "category": category,
-                "metadata": metadata
+                "metadata": metadata,
+                "product_url": product_url
             }
         }
         
@@ -214,8 +219,9 @@ class AddProductLinkView(APIView):
             metadata['brand'] = scraped['brand']
         metadata['aesthetic_tone'] = metadata.get('aesthetic_tone') or f"Linked product from {scraped['source_url']}"
 
+        user = get_object_or_404(User, user_uid=user_id)
         wardrobe_data = build_wardrobe_item_payload(
-            user_id=user_id,
+            user=user,
             name=scraped['name'],
             color=scraped['color'],
             type_str=scraped['type'],
@@ -314,10 +320,11 @@ class ApproveProductView(APIView):
         processed_img_url = f"{settings.MEDIA_URL}wardrobe/{temp_gen_name}"
         
         # 6. Construct DB entry payload
+        user = get_object_or_404(User, user_uid=user_id)
         item_id = str(uuid.uuid4())
         wardrobe_data = {
             "item_id": item_id,
-            "user_id": user_id,
+            "user": user.id,
             "name": name,
             "category": category,
             "subcategory": type_str,
@@ -337,6 +344,7 @@ class ApproveProductView(APIView):
             "image_url": processed_img_url,  # The main image url references the processed one
             "original_image": original_img_url,
             "processed_image": processed_img_url,
+            "product_url": product_data.get('product_url'),
             "ai_generated": not fallback_used,
             "fallback_used": fallback_used,
             "added_at": datetime.utcnow().isoformat() + 'Z',

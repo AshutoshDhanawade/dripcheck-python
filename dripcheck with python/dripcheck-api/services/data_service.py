@@ -78,7 +78,7 @@ async def get_bundles(user_id: str, occasion_filter: Optional[str] = None) -> Li
             deduplicated.append(b)
 
     deduplicated.sort(key=lambda b: b.compatibility_score, reverse=True)
-    return deduplicated[:10]
+    return deduplicated
 
 async def save_bundle_for_user(user_id: str, bundle: OutfitBundle) -> OutfitBundle:
     for i, b in enumerate(_bundles):

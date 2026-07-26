@@ -149,7 +149,7 @@ class VerifyOTPView(APIView):
 
                 response_data = {
                     "message": "Registration complete. User verified.",
-                    "user_id": user.id,
+                    "user_id": str(user.user_uid),
                     "show_onboarding": not user.is_onboarded,
                 }
                 
@@ -186,7 +186,7 @@ class LoginView(APIView):
                     "message": "Login successful.",
                     "is_new_user": not user.is_onboarded,
                     "show_onboarding": not user.is_onboarded,
-                    "user_id": user.id,
+                    "user_id": str(user.user_uid),
                 }
 
                 refresh = RefreshToken.for_user(user)
@@ -316,7 +316,7 @@ class OnboardingSubmitView(APIView):
                 return Response({
                     "message": "Onboarding updated successfully." if not all_answers_true else "Onboarding completed successfully.",
                     "show_onboarding": not all_answers_true,
-                    "user_id": user.id,
+                    "user_id": str(user.user_uid),
                 }, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -368,7 +368,7 @@ class PublicOnboardingSubmitView(APIView):
                 return Response({
                     "message": "Onboarding completed successfully.",
                     "show_onboarding": False,
-                    "user_id": user.id,
+                    "user_id": str(user.user_uid),
                     "onboarding_data": formatted_responses,
                     "redirect_url": "/"
                 }, status=status.HTTP_200_OK)

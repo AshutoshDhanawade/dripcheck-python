@@ -5,7 +5,7 @@ The Bundle Generation API is the core intelligence of the Dripcheck application.
 
 ## Core Endpoints
 
-1.  **Generate Personal Bundles** (`GET /api/bundles/<user_id>`)
+1.  **Generate Personal Bundles** (`GET /api/bundles/<uuid:user_id>`)
     *   **Purpose**: Delivers the top 10 best-scoring outfit bundles tailored to the user.
     *   **Mechanism**: Merges any previously saved bundles with newly generated ones. It dynamically runs the Compatibility Engine on the user's current wardrobe, filtering out colors the user prefers to avoid, and filtering by `occasion` if requested.
 

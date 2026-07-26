@@ -89,6 +89,7 @@ class WardrobeItem(BaseModel):
     wear_count: int = 0
     last_worn: Optional[str] = None
     image_url: Optional[str] = None
+    product_url: Optional[str] = None
     added_at: str
 
 class OutfitBundle(BaseModel):

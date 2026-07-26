@@ -24,6 +24,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 
+from accounts.models import User
 from api.models import OutfitBundle, WardrobeItem, UserProfile, MarketplaceBundle
 from api.serializers import OutfitBundleSerializer, MarketplaceBundleSerializer
 from engine.compatibility_engine import generate_bundles
@@ -43,16 +44,16 @@ class BundleListView(APIView):
         occasion = request.query_params.get('occasion')
 
         # ── Stored bundles ────────────────────────────────────────────────────
-        stored_bundles = list(OutfitBundle.objects.filter(user_id=user_id))
+        stored_bundles = list(OutfitBundle.objects.filter(user__user_uid=user_id))
         if occasion:
             stored_bundles = [
                 b for b in stored_bundles if occasion in (b.occasion_tags or [])
             ]
 
         # ── User wardrobe & preferences ───────────────────────────────────────
-        user_wardrobe = list(WardrobeItem.objects.filter(user_id=user_id))
+        user_wardrobe = list(WardrobeItem.objects.filter(user__user_uid=user_id))
         try:
-            user_profile = UserProfile.objects.get(user_id=user_id)
+            user_profile = UserProfile.objects.get(user__user_uid=user_id)
             avoided_colors = user_profile.avoided_colors or []
         except UserProfile.DoesNotExist:
             avoided_colors = []
@@ -72,13 +73,12 @@ class BundleListView(APIView):
                 seen.add(key)
                 deduplicated.append(bundle)
 
-        # ── Sort by compatibility score (highest first), cap at 10 ────────────
+        # ── Sort by compatibility score (highest first) ────────────────────────
         deduplicated.sort(key=lambda b: b.compatibility_score, reverse=True)
-        top_bundles = deduplicated[:10]
 
         # ── Serialize (ORM objects use serializer; raw dicts pass through) ─────
         response_data = []
-        for bundle in top_bundles:
+        for bundle in deduplicated:
             if isinstance(bundle, OutfitBundle):
                 response_data.append(OutfitBundleSerializer(bundle).data)
             else:
@@ -97,8 +97,9 @@ class SaveBundleView(APIView):
     """
 
     def post(self, request, user_id):
+        user = get_object_or_404(User, user_uid=user_id)
         data = request.data.copy()
-        data['user_id'] = user_id
+        data['user'] = user.id
         data['is_saved'] = True
 
         bundle_id = data.get('bundle_id')
@@ -106,7 +107,7 @@ class SaveBundleView(APIView):
         # ── If bundle already exists, mark it saved ───────────────────────────
         if bundle_id:
             try:
-                bundle = OutfitBundle.objects.get(bundle_id=bundle_id, user_id=user_id)
+                bundle = OutfitBundle.objects.get(bundle_id=bundle_id, user__user_uid=user_id)
                 bundle.is_saved = True
                 bundle.save()
                 return Response(OutfitBundleSerializer(bundle).data, status=status.HTTP_200_OK)
