@@ -26,3 +26,102 @@ class MerchantProduct(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.category})"
+
+
+class FootwearAiRecommendation(models.Model):
+    item_id = models.CharField(max_length=255, primary_key=True)
+    name = models.CharField(max_length=255)
+    category = models.CharField(max_length=50, choices=Category.choices)
+    subcategory = models.CharField(max_length=100)
+    primary_color = models.CharField(max_length=100)
+    secondary_color = models.CharField(max_length=100, null=True, blank=True)
+    color_family = models.CharField(max_length=50, choices=ColorFamily.choices)
+    pattern = models.CharField(max_length=50, choices=Pattern.choices)
+    fit = models.CharField(max_length=50, choices=Fit.choices)
+    occasion_type = models.JSONField(default=list)
+    season = models.CharField(max_length=50, choices=Season.choices)
+    formality_level = models.IntegerField()
+    brand = models.CharField(max_length=255, null=True, blank=True)
+    material = models.CharField(max_length=100, null=True, blank=True)
+    style_tags = models.JSONField(null=True, blank=True)
+    mood_tags = models.JSONField(null=True, blank=True)
+    aesthetic_tone = models.CharField(max_length=255, null=True, blank=True)
+    wear_count = models.IntegerField(default=0)
+    last_worn = models.CharField(max_length=100, null=True, blank=True)
+    image_url = models.CharField(max_length=1000, null=True, blank=True)
+    original_image = models.CharField(max_length=1000, null=True, blank=True)
+    processed_image = models.CharField(max_length=1000, null=True, blank=True)
+    product_url = models.CharField(max_length=2000, null=True, blank=True)
+    ai_generated = models.BooleanField(default=False)
+    fallback_used = models.BooleanField(default=False)
+    added_at = models.CharField(max_length=100)
+    user_id = models.IntegerField()
+
+    def __str__(self):
+        return f"{self.name} ({self.subcategory})"
+
+
+class BottomwearAiGeneration(models.Model):
+    item_id = models.CharField(max_length=255, primary_key=True)
+    name = models.CharField(max_length=255)
+    category = models.CharField(max_length=50, choices=Category.choices)
+    subcategory = models.CharField(max_length=100)
+    primary_color = models.CharField(max_length=100)
+    secondary_color = models.CharField(max_length=100, null=True, blank=True)
+    color_family = models.CharField(max_length=50, choices=ColorFamily.choices)
+    pattern = models.CharField(max_length=50, choices=Pattern.choices)
+    fit = models.CharField(max_length=50, choices=Fit.choices)
+    occasion_type = models.JSONField(default=list)
+    season = models.CharField(max_length=50, choices=Season.choices)
+    formality_level = models.IntegerField()
+    brand = models.CharField(max_length=255, null=True, blank=True)
+    material = models.CharField(max_length=100, null=True, blank=True)
+    style_tags = models.JSONField(null=True, blank=True)
+    mood_tags = models.JSONField(null=True, blank=True)
+    aesthetic_tone = models.CharField(max_length=255, null=True, blank=True)
+    wear_count = models.IntegerField(default=0)
+    last_worn = models.CharField(max_length=100, null=True, blank=True)
+    image_url = models.CharField(max_length=1000, null=True, blank=True)
+    original_image = models.CharField(max_length=1000, null=True, blank=True)
+    processed_image = models.CharField(max_length=1000, null=True, blank=True)
+    product_url = models.CharField(max_length=2000, null=True, blank=True)
+    ai_generated = models.BooleanField(default=False)
+    fallback_used = models.BooleanField(default=False)
+    added_at = models.CharField(max_length=100)
+    user_id = models.IntegerField()
+
+    def __str__(self):
+        return f"{self.name} ({self.subcategory})"
+
+
+class TopwearAiRecommendation(models.Model):
+    item_id = models.CharField(max_length=255, primary_key=True)
+    name = models.CharField(max_length=255)
+    category = models.CharField(max_length=50, choices=Category.choices)
+    subcategory = models.CharField(max_length=100)
+    primary_color = models.CharField(max_length=100)
+    secondary_color = models.CharField(max_length=100, null=True, blank=True)
+    color_family = models.CharField(max_length=50, choices=ColorFamily.choices)
+    pattern = models.CharField(max_length=50, choices=Pattern.choices)
+    fit = models.CharField(max_length=50, choices=Fit.choices)
+    occasion_type = models.JSONField(default=list)
+    season = models.CharField(max_length=50, choices=Season.choices)
+    formality_level = models.IntegerField()
+    brand = models.CharField(max_length=255, null=True, blank=True)
+    material = models.CharField(max_length=100, null=True, blank=True)
+    style_tags = models.JSONField(null=True, blank=True)
+    mood_tags = models.JSONField(null=True, blank=True)
+    aesthetic_tone = models.CharField(max_length=255, null=True, blank=True)
+    wear_count = models.IntegerField(default=0)
+    last_worn = models.CharField(max_length=100, null=True, blank=True)
+    image_url = models.CharField(max_length=1000, null=True, blank=True)
+    original_image = models.CharField(max_length=1000, null=True, blank=True)
+    processed_image = models.CharField(max_length=1000, null=True, blank=True)
+    product_url = models.CharField(max_length=2000, null=True, blank=True)
+    ai_generated = models.BooleanField(default=False)
+    fallback_used = models.BooleanField(default=False)
+    added_at = models.CharField(max_length=100)
+    user_id = models.IntegerField()
+
+    def __str__(self):
+        return f"{self.name} ({self.subcategory})"

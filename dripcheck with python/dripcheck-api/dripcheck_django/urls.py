@@ -8,6 +8,7 @@ urlpatterns = [
     path('api/', include('api.urls')),
     path('auth/', include('accounts.urls')),
     path('api/bundle-generate/', include('bundle_generate.urls')),
+    path('api/ai-generation/', include('ai_generation.urls')),
 ]
 
 if settings.DEBUG:
