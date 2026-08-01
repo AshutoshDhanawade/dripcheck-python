@@ -46,6 +46,22 @@ class AuthFlowTests(TestCase):
         user.refresh_from_db()
         self.assertTrue(user.is_onboarded)
 
+    def test_login_returns_jwt_tokens(self):
+        User.objects.create(mobile_no='+919988770011', is_active=True)
+
+        response = self.client.post(reverse('login'), {'mobile_no': '+919988770011'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('access_token', response.data)
+        self.assertIn('refresh_token', response.data)
+        self.assertIn('user_id', response.data)
+
+        refresh_response = self.client.post(reverse('token_refresh'), {
+            'refresh': response.data['refresh_token'],
+        }, format='json')
+        self.assertEqual(refresh_response.status_code, 200)
+        self.assertIn('access', refresh_response.data)
+
     def test_public_onboarding_stores_question_text_answers(self):
         user = User.objects.create(mobile_no='+919988776655', is_active=True)
         OnboardingQuestion.objects.create(

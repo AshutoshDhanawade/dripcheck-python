@@ -79,6 +79,9 @@ def build_question_answer_responses(responses, answer_mapper=simplify_onboarding
     return formatted_responses
 
 class SignupView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
     def post(self, request):
         try:
             serializer = SignupSerializer(data=request.data)
@@ -116,6 +119,9 @@ class SignupView(APIView):
             )
 
 class VerifyOTPView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
     def post(self, request):
         try:
             serializer = VerifyOTPSerializer(data=request.data)
@@ -150,6 +156,8 @@ class VerifyOTPView(APIView):
                 response_data = {
                     "message": "Registration complete. User verified.",
                     "user_id": str(user.user_uid),
+                    "access_token": str(refresh.access_token),
+                    "refresh_token": str(refresh),
                     "show_onboarding": not user.is_onboarded,
                 }
                 
@@ -175,6 +183,9 @@ class VerifyOTPView(APIView):
             )
 
 class LoginView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
     def post(self, request):
         try:
             serializer = LoginSerializer(data=request.data)
@@ -197,6 +208,10 @@ class LoginView(APIView):
                     access_token=str(refresh.access_token),
                     refresh_token=str(refresh)
                 )
+
+                # Include tokens in the response so the frontend can authenticate
+                response_data["access_token"] = str(refresh.access_token)
+                response_data["refresh_token"] = str(refresh)
 
                 # Include stored user details when available
                 if user.full_name:

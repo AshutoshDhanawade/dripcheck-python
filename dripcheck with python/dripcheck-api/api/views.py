@@ -5,19 +5,18 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from .models import WardrobeItem, UserProfile, WearLog, OutfitBundle, MarketplaceBundle
-from accounts.models import User
 from .serializers import WardrobeItemSerializer, UserProfileSerializer, WearLogSerializer, OutfitBundleSerializer, MarketplaceBundleSerializer
 
 class WardrobeListCreateView(APIView):
-    def get(self, request, user_id):
-        items = WardrobeItem.objects.filter(user__user_uid=user_id)
+    def get(self, request):
+        items = WardrobeItem.objects.filter(user=request.user)
         serializer = WardrobeItemSerializer(items, many=True)
         return Response(serializer.data)
 
-    def post(self, request, user_id):
+    def post(self, request):
         data = request.data.copy()
         data['item_id'] = str(uuid.uuid4())
-        user = get_object_or_404(User, user_uid=user_id)
+        user = request.user
         data['user'] = user.id
         data['added_at'] = datetime.utcnow().isoformat() + 'Z'
         data['wear_count'] = 0
@@ -28,28 +27,28 @@ class WardrobeListCreateView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class WardrobeDetailView(APIView):
-    def put(self, request, user_id, item_id):
-        item = get_object_or_404(WardrobeItem, user__user_uid=user_id, item_id=item_id)
+    def put(self, request, item_id):
+        item = get_object_or_404(WardrobeItem, user=request.user, item_id=item_id)
         serializer = WardrobeItemSerializer(item, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    def delete(self, request, user_id, item_id):
-        item = get_object_or_404(WardrobeItem, user__user_uid=user_id, item_id=item_id)
+    def delete(self, request, item_id):
+        item = get_object_or_404(WardrobeItem, user=request.user, item_id=item_id)
         item.delete()
-        OutfitBundle.objects.filter(user__user_uid=user_id, items__contains=item_id).update(has_missing_item=True)
+        OutfitBundle.objects.filter(user=request.user, items__contains=item_id).update(has_missing_item=True)
         return Response({"status": "success"}, status=status.HTTP_204_NO_CONTENT)
 
 class UserProfileDetailView(APIView):
-    def get(self, request, user_id):
-        user_profile = get_object_or_404(UserProfile, user__user_uid=user_id)
+    def get(self, request):
+        user_profile = get_object_or_404(UserProfile, user=request.user)
         serializer = UserProfileSerializer(user_profile)
         return Response(serializer.data)
 
-    def put(self, request, user_id):
-        user_obj = get_object_or_404(User, user_uid=user_id)
+    def put(self, request):
+        user_obj = request.user
         data = request.data.copy()
         data['user'] = user_obj.id
         user_profile, created = UserProfile.objects.get_or_create(user=user_obj, defaults=data)
@@ -63,8 +62,8 @@ class UserProfileDetailView(APIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 class AnalyticsView(APIView):
-    def get(self, request, user_id):
-        user_wardrobe = WardrobeItem.objects.filter(user__user_uid=user_id)
+    def get(self, request):
+        user_wardrobe = WardrobeItem.objects.filter(user=request.user)
         total_items = user_wardrobe.count()
         never_worn_count = user_wardrobe.filter(wear_count=0).count()
         
@@ -73,7 +72,7 @@ class AnalyticsView(APIView):
         
         utilization_percentage = ((total_items - never_worn_count) / total_items * 100) if total_items > 0 else 0
         
-        saved_bundles = OutfitBundle.objects.filter(user__user_uid=user_id, is_saved=True)
+        saved_bundles = OutfitBundle.objects.filter(user=request.user, is_saved=True)
         score_sum = sum(b.compatibility_score for b in saved_bundles)
         avg_score = score_sum / saved_bundles.count() if saved_bundles.count() else 0
         
@@ -92,13 +91,13 @@ class AnalyticsView(APIView):
         })
 
 class WearLogView(APIView):
-    def get(self, request, user_id):
-        logs = WearLog.objects.filter(user__user_uid=user_id)
+    def get(self, request):
+        logs = WearLog.objects.filter(user=request.user)
         serializer = WearLogSerializer(logs, many=True)
         return Response(serializer.data)
 
-    def post(self, request, user_id):
-        user_obj = get_object_or_404(User, user_uid=user_id)
+    def post(self, request):
+        user_obj = request.user
         data = request.data
         bundle_id = data.get("bundle_id")
         date = data.get("worn_date")
@@ -119,7 +118,7 @@ class WearLogView(APIView):
                 
         for item_id in item_ids:
             try:
-                item = WardrobeItem.objects.get(item_id=item_id, user__user_uid=user_id)
+                item = WardrobeItem.objects.get(item_id=item_id, user=request.user)
                 item.wear_count += 1
                 item.last_worn = date
                 item.save()
@@ -150,7 +149,11 @@ class FrontendLogView(APIView):
     """
     POST /api/logs
     Accepts frontend logs and prints/records them in the backend.
+    Intentionally public so errors can be logged even when the user is unauthenticated.
     """
+    authentication_classes = []
+    permission_classes = []
+
     def post(self, request):
         level = request.data.get('level', 'info').lower()
         message = request.data.get('message', '')
