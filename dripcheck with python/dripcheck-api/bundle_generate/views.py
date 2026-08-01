@@ -60,13 +60,13 @@ class BestSellingProductsView(APIView):
 class GenerateFromProductView(APIView):
     """
     POST /api/bundle-generate/recommend/
-    Payload: {"product_id": "...", "user_id": "..."}
+    Payload: {"product_id": "..."}
     Generates bundles centering around the selected merchant product.
+    Requires a valid JWT; the user is resolved from the token.
     """
     def post(self, request):
         data = request.data
         product_id = data.get('product_id')
-        user_id = data.get('user_id')
 
         if not product_id:
             return Response({"detail": "product_id is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -89,18 +89,17 @@ class GenerateFromProductView(APIView):
         # ensuring the engine MUST use it to form a valid bundle.
         wardrobe_items = [selected_wardrobe_item] + candidate_items
 
-        # Fetch user preferences if user_id is provided
+        # Fetch user preferences from the JWT-authenticated user
         avoided_colors = []
-        if user_id:
-            try:
-                user_profile = UserProfile.objects.get(user_id=user_id)
-                avoided_colors = user_profile.avoided_colors or []
-            except UserProfile.DoesNotExist:
-                pass
+        try:
+            user_profile = UserProfile.objects.get(user=request.user)
+            avoided_colors = user_profile.avoided_colors or []
+        except UserProfile.DoesNotExist:
+            pass
 
         # Generate bundles
-        # We pass a fallback user_id if not provided, since the engine requires a string
-        target_user_id = user_id if user_id else "merchant_guest"
+        # We pass the authenticated user's uid, since the engine requires a string
+        target_user_id = str(request.user.user_uid)
         
         generated_bundles = generate_bundles(
             user_id=target_user_id,
@@ -116,19 +115,19 @@ class GenerateFromProductView(APIView):
 class GenerateFromWardrobeItemView(APIView):
     """
     POST /api/bundle-generate/recommend-from-wardrobe/
-    Payload: {"item_id": "...", "user_id": "..."}
+    Payload: {"item_id": "..."}
     Generates bundles centering around the user's selected wardrobe item, filling the rest from merchant products.
+    Requires a valid JWT; the user is resolved from the token.
     """
     def post(self, request):
         data = request.data
         item_id = data.get('item_id')
-        user_id = data.get('user_id')
 
-        if not item_id or not user_id:
-            return Response({"detail": "item_id and user_id are required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not item_id:
+            return Response({"detail": "item_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Get the selected wardrobe item
-        selected_wardrobe_item = get_object_or_404(WardrobeItem, item_id=item_id, user__user_uid=user_id)
+        # Get the selected wardrobe item (scoped to the JWT-authenticated user)
+        selected_wardrobe_item = get_object_or_404(WardrobeItem, item_id=item_id, user=request.user)
 
         # Determine missing categories (Top, Bottom, Footwear)
         required_categories = {Category.TOP, Category.BOTTOM, Category.FOOTWEAR}
@@ -147,14 +146,14 @@ class GenerateFromWardrobeItemView(APIView):
         # Fetch user preferences
         avoided_colors = []
         try:
-            user_profile = UserProfile.objects.get(user_id=user_id)
+            user_profile = UserProfile.objects.get(user=request.user)
             avoided_colors = user_profile.avoided_colors or []
         except UserProfile.DoesNotExist:
             pass
 
         # Generate bundles
         generated_bundles = generate_bundles(
-            user_id=user_id,
+            user_id=str(request.user.user_uid),
             wardrobe_items=wardrobe_items,
             occasion_filter=None, 
             avoided_colors=avoided_colors

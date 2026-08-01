@@ -5,9 +5,9 @@ This module previously used FastAPI. It has been fully converted to
 Django REST Framework (DRF). The three endpoints below preserve the
 original logic from the FastAPI version:
 
-  GET  /api/bundles/<user_id>         → BundleListView
-  POST /api/bundles/<user_id>/save    → SaveBundleView
-  GET  /api/marketplace               → MarketplaceView
+  GET  /api/bundles/         → BundleListView
+  POST /api/bundles/save     → SaveBundleView
+  GET  /api/marketplace      → MarketplaceView
 
 These views are registered in api/urls.py and served via Django's
 URL routing (dripcheck_django/urls.py → api/).
@@ -22,9 +22,7 @@ URL routing (dripcheck_django/urls.py → api/).
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.shortcuts import get_object_or_404
 
-from accounts.models import User
 from api.models import OutfitBundle, WardrobeItem, UserProfile, MarketplaceBundle
 from api.serializers import OutfitBundleSerializer, MarketplaceBundleSerializer
 from engine.compatibility_engine import generate_bundles
@@ -40,27 +38,27 @@ class BundleListView(APIView):
     and generated bundles.
     """
 
-    def get(self, request, user_id):
+    def get(self, request):
         occasion = request.query_params.get('occasion')
 
         # ── Stored bundles ────────────────────────────────────────────────────
-        stored_bundles = list(OutfitBundle.objects.filter(user__user_uid=user_id))
+        stored_bundles = list(OutfitBundle.objects.filter(user=request.user))
         if occasion:
             stored_bundles = [
                 b for b in stored_bundles if occasion in (b.occasion_tags or [])
             ]
 
         # ── User wardrobe & preferences ───────────────────────────────────────
-        user_wardrobe = list(WardrobeItem.objects.filter(user__user_uid=user_id))
+        user_wardrobe = list(WardrobeItem.objects.filter(user=request.user))
         try:
-            user_profile = UserProfile.objects.get(user__user_uid=user_id)
+            user_profile = UserProfile.objects.get(user=request.user)
             avoided_colors = user_profile.avoided_colors or []
         except UserProfile.DoesNotExist:
             avoided_colors = []
 
         # ── Engine-generated bundles ──────────────────────────────────────────
         generated_bundles = generate_bundles(
-            user_id, user_wardrobe, occasion, avoided_colors
+            str(request.user.user_uid), user_wardrobe, occasion, avoided_colors
         )
 
         # ── Merge & deduplicate by sorted item list ───────────────────────────
@@ -96,8 +94,8 @@ class SaveBundleView(APIView):
     Otherwise a new bundle record is created.
     """
 
-    def post(self, request, user_id):
-        user = get_object_or_404(User, user_uid=user_id)
+    def post(self, request):
+        user = request.user
         data = request.data.copy()
         data['user'] = user.id
         data['is_saved'] = True
@@ -107,7 +105,7 @@ class SaveBundleView(APIView):
         # ── If bundle already exists, mark it saved ───────────────────────────
         if bundle_id:
             try:
-                bundle = OutfitBundle.objects.get(bundle_id=bundle_id, user__user_uid=user_id)
+                bundle = OutfitBundle.objects.get(bundle_id=bundle_id, user=request.user)
                 bundle.is_saved = True
                 bundle.save()
                 return Response(OutfitBundleSerializer(bundle).data, status=status.HTTP_200_OK)

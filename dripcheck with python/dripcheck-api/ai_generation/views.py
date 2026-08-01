@@ -10,14 +10,12 @@ class AISuggestionBaseView(APIView):
     category = None
 
     def handle_request(self, request):
-        user_id = request.data.get('user_id') or request.query_params.get('user_id')
-        if not user_id:
-            return Response({"detail": "user_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        user = request.user
 
         occasion = request.data.get('occasion') or request.query_params.get('occasion')
         season = request.data.get('season') or request.query_params.get('season')
 
-        wardrobe_items = list(WardrobeItem.objects.filter(user__user_uid=user_id))
+        wardrobe_items = list(WardrobeItem.objects.filter(user=user))
         owned_ids = {item.item_id for item in wardrobe_items}
 
         ai_candidates = get_ai_candidates(

@@ -97,7 +97,9 @@ class GenerateAvatarView(APIView):
       - color      : str   (required)
       - type       : str   (required) — e.g. T-Shirt, Jeans, Sneakers
       - category   : str   (required) — Top Wear / Bottom Wear / Foot Wear
-      - user_id    : str   (optional, default: user_demo)
+
+    Requires a valid JWT via `Authorization: Bearer <token>`. The user is
+    resolved from the token, not from a user_id in the payload.
 
     Returns:
       {
@@ -121,7 +123,6 @@ class GenerateAvatarView(APIView):
         color      = request.data.get('color', '').strip()
         type_str   = request.data.get('type', '').strip()
         category   = request.data.get('category', 'Top Wear').strip()
-        user_id    = request.data.get('user_id', 'user_demo')
 
         if not image_file:
             return Response(
@@ -183,7 +184,7 @@ class GenerateAvatarView(APIView):
         needed_categories = COMPLEMENT_MAP.get(db_category, ['Top', 'Bottom', 'Footwear'])
         db_items = list(
             WardrobeItem.objects.filter(
-                user__user_uid=user_id,
+                user=request.user,
                 category__in=needed_categories
             )
         )
@@ -251,7 +252,7 @@ class GenerateAvatarView(APIView):
         )
 
         try:
-            profile = UserProfile.objects.get(user__user_uid=user_id)
+            profile = UserProfile.objects.get(user=request.user)
             qwen_prompt = huggingface_service.build_avatar_prompt(
                 uploaded_item_desc = uploaded_item_desc,
                 uploaded_category  = db_category,
