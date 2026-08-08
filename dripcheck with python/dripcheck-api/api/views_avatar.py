@@ -8,16 +8,18 @@ Flow:
   2. Map the uploaded item to the compatibility engine's WardrobeItem format
   3. Query DB for wardrobe items in the OTHER categories
   4. Run the compatibility engine to find the best-matching bundle
-  5. Build a Qwen Image Edit prompt (using user profile attributes if available)
-  6. Call Qwen/Qwen-Image-Edit via Hugging Face Diffusers
-  7. Save avatar to media/avatars/
-  8. Return avatar_url + bundle details + compatibility score
+  5. Detect the garment's real color from the photo (overrides user input)
+  6. Build an avatar prompt (using user profile attributes if available)
+  7. Generate the avatar via fal.ai FLUX.2-klein-9B (image edit)
+  8. Save avatar to media/avatars/
+  9. Return avatar_url + bundle details + compatibility score
 """
 
 import os
 import uuid
 import logging
 from datetime import datetime
+from io import BytesIO
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -65,6 +67,108 @@ CATEGORY_DISPLAY = {
     'Layer': 'layer/jacket',
     'Accessory': 'accessory',
 }
+
+
+# ── Garment color detection ───────────────────────────────────────────────────
+_NAMED_COLORS = [
+    ("White", (245, 245, 245)), ("Off-White", (250, 250, 240)), ("Beige", (245, 245, 220)),
+    ("Grey", (128, 128, 128)), ("Charcoal", (60, 70, 80)), ("Black", (20, 20, 20)),
+    ("Brown", (101, 67, 33)), ("Camel", (193, 154, 107)), ("Khaki", (195, 176, 145)),
+    ("Tan", (210, 180, 140)), ("Rust", (183, 65, 14)), ("Terracotta", (226, 114, 91)),
+    ("Navy", (35, 45, 80)), ("Midnight Blue", (25, 25, 60)), ("Slate", (112, 128, 144)),
+    ("Dark Green", (20, 70, 40)), ("Olive", (107, 142, 35)), ("Sage Green", (150, 170, 140)),
+    ("Teal", (0, 128, 128)), ("Teal", (0, 160, 150)), ("Teal", (70, 160, 150)),
+    ("Dark Teal", (0, 90, 90)), ("Dark Teal", (30, 110, 100)), ("Dark Teal", (20, 70, 70)),
+    ("Mint", (152, 230, 200)),
+    ("Red", (220, 30, 30)), ("Burgundy", (128, 0, 32)), ("Orange", (255, 140, 0)),
+    ("Mustard", (230, 180, 34)), ("Yellow", (255, 210, 40)),
+    ("Cobalt Blue", (0, 71, 171)), ("Baby Blue", (137, 207, 240)), ("Light Blue", (173, 216, 230)),
+    ("Purple", (128, 0, 128)), ("Lavender", (200, 190, 240)), ("Fuchsia", (255, 0, 255)),
+    ("Baby Pink", (255, 182, 193)), ("Blush", (222, 93, 131)), ("Peach", (255, 218, 185)),
+    ("Neon Green", (57, 255, 20)),
+]
+
+
+def _nearest_color_name(rgb: tuple) -> str:
+    """Map an (r, g, b) tuple to the closest named fashion color."""
+    r, g, b = rgb
+    best_name, best_distance = "Grey", float("inf")
+    for name, (pr, pg, pb) in _NAMED_COLORS:
+        distance = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2
+        if distance < best_distance:
+            best_name, best_distance = name, distance
+    return best_name
+
+
+def _detect_garment_color(image_bytes: bytes) -> tuple[str, str] | None:
+    """
+    Detect the garment's dominant color from the uploaded product photo.
+
+    Samples the central band of the image, votes saturated pixels to their
+    nearest named fashion color, then returns (color_name, hex) for the
+    dominant cluster. The teal/green boundary is corrected by hue so a green
+    garment is not mislabelled as blue. Returns None when the garment is
+    white/neutral (no clear color).
+    """
+    try:
+        from PIL import Image
+
+        img = Image.open(BytesIO(image_bytes)).convert("RGB")
+        width, height = img.size
+        left, top = int(width * 0.25), int(height * 0.25)
+        right, bottom = int(width * 0.75), int(height * 0.75)
+        crop = img.crop((left, top, right, bottom)).resize((40, 40))
+        pixels = list(crop.getdata())
+
+        saturated = [
+            (r, g, b)
+            for r, g, b in pixels
+            if max(r, g, b) - min(r, g, b) > 35
+        ]
+        if len(saturated) < 8:
+            return None
+
+        votes: dict[str, int] = {}
+        for r, g, b in saturated:
+            name = _nearest_color_name((r, g, b))
+            votes[name] = votes.get(name, 0) + 1
+        top_name, top_count = max(votes.items(), key=lambda pair: pair[1])
+        if top_count < 3:
+            return None
+
+        def _hue(r: int, g: int, b: int) -> float:
+            rn, gn, bn = r / 255.0, g / 255.0, b / 255.0
+            mx, mn = max(rn, gn, bn), min(rn, gn, bn)
+            d = mx - mn
+            if d == 0:
+                return 0.0
+            if mx == rn:
+                h = ((gn - bn) / d) % 6
+            elif mx == gn:
+                h = (bn - rn) / d + 2
+            else:
+                h = (rn - gn) / d + 4
+            return h * 60
+
+        from collections import Counter
+        hues = [round(_hue(r, g, b) / 20) * 20 % 360 for r, g, b in saturated]
+        modal_hue = Counter(hues).most_common(1)[0][0]
+        cluster = [p for p in saturated if abs(_hue(*p) - modal_hue) <= 25]
+        if not cluster:
+            return (top_name, "#000000")
+        avg = tuple(round(sum(c[i] for c in cluster) / len(cluster)) for i in range(3))
+        hex_str = "#%02x%02x%02x" % avg
+
+        if top_name in ("Teal", "Dark Teal") and modal_hue < 172:
+            luminance = 0.299 * avg[0] + 0.587 * avg[1] + 0.114 * avg[2]
+            top_name = "Dark Green" if luminance < 150 else "Green"
+        return (top_name, hex_str)
+    except Exception:
+        logger.exception("Failed to detect garment color from image")
+        return None
+    except Exception:
+        logger.exception("Failed to detect garment color from image")
+        return None
 
 
 def _item_to_dict(item: WardrobeItem) -> dict:
@@ -138,7 +242,7 @@ class GenerateAvatarView(APIView):
         # ── 2. Map category to DB enum ─────────────────────────────────────────
         db_category = clean_category(category)  # e.g. 'Top', 'Bottom', 'Footwear'
 
-        # ── 3. Extract basic metadata from the image using Gemini (or fallback) ─
+        # ── 3. Read the uploaded image bytes ────────────────────────────────────
         try:
             with image_file.open('rb') as f:
                 image_bytes = f.read()
@@ -149,6 +253,15 @@ class GenerateAvatarView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+        # ── 3. Override color with the real garment color from the photo ──
+        detected = _detect_garment_color(image_bytes)
+        detected_color_hex = None
+        if detected:
+            detected_color, detected_color_hex = detected
+            logger.info(f"Detected garment color from image: {detected_color} (#{detected_color_hex} hex) (form value was '{color}')")
+            color = detected_color
+
+        # ── 4. Extract basic metadata (Gemini or local fallback) ─
         metadata = {}
         try:
             metadata = gemini_service.extract_product_metadata(
@@ -158,7 +271,7 @@ class GenerateAvatarView(APIView):
             logger.warning(f"Gemini metadata extraction failed, using local fallback: {e}")
             metadata = gemini_service.infer_metadata_locally(name, color, type_str, category)
 
-        # ── 4. Build a fake WardrobeItem for the uploaded piece ────────────────
+        # ── 5. Build a fake WardrobeItem for the uploaded piece ────────────────
         uploaded_fake = _FakeItem(
             item_id          = f"UPLOADED-{uuid.uuid4()}",
             name             = name,
@@ -179,8 +292,13 @@ class GenerateAvatarView(APIView):
         )
 
         uploaded_item_desc = f"{color} {name} ({type_str})"
+        if detected_color_hex:
+            uploaded_item_desc += (
+                f" in exact color {detected_color_hex} — replicate this exact garment "
+                f"(same color, same design) from the uploaded photo"
+            )
 
-        # ── 5. Query DB for complementary items ───────────────────────────────
+        # ── 6. Query DB for complementary items ───────────────────────────────
         needed_categories = COMPLEMENT_MAP.get(db_category, ['Top', 'Bottom', 'Footwear'])
         db_items = list(
             WardrobeItem.objects.filter(
@@ -189,7 +307,7 @@ class GenerateAvatarView(APIView):
             )
         )
 
-        # ── 6. Find best-matching bundle via compatibility engine ─────────────
+        # ── 7. Find best-matching bundle via compatibility engine ─────────────
         best_score        = 0.0
         best_style_tags   = []
         best_dominant     = {'color': color, 'palette': metadata.get('color_family', 'Neutral')}
@@ -232,7 +350,7 @@ class GenerateAvatarView(APIView):
         for slot, item in recommended_bundle.items():
             bundle_dicts[slot] = _item_to_dict(item) if isinstance(item, WardrobeItem) else None
 
-        # ── 7. Build Qwen Image Edit prompt for avatar generation ──────────────
+        # ── 8. Build avatar prompt ───────────────────────────────────────────
         qwen_prompt = huggingface_service.build_avatar_prompt(
             uploaded_item_desc = uploaded_item_desc,
             uploaded_category  = db_category,
@@ -273,7 +391,7 @@ class GenerateAvatarView(APIView):
         except UserProfile.DoesNotExist:
             pass
 
-        # ── 8. Call Qwen avatar generation ─────────────────────────────────────
+        # ── 9. Call avatar generation ──────────────────────────────────────────
         avatar_bytes = huggingface_service.generate_avatar_image(
             qwen_prompt,
             image_bytes=image_bytes,
@@ -317,9 +435,11 @@ class GenerateAvatarView(APIView):
 
         return Response({
             "success":            True,
+            "avatar_url":         avatar_url,
             "avatar_image_url":   avatar_url,
             "avatar_generated":   avatar_generated,
             "recommended_bundle": bundle_dicts,
+            "bundle":            [item for item in bundle_dicts.values() if item],
             "uploaded_item":      uploaded_item_out,
             "compatibility_score": round(best_score, 1),
             "matching_score":     matching_score,

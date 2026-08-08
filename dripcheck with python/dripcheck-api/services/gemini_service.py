@@ -182,7 +182,7 @@ def infer_metadata_locally(name: str, color: str, type_str: str, category: str) 
     # 1. Color family heuristics
     color_lower = color.lower()
     color_family = 'Bold'
-    if any(c in color_lower for c in ['black', 'navy', 'charcoal', 'dark grey', 'dark gray', 'slate', 'indigo']):
+    if any(c in color_lower for c in ['black', 'navy', 'charcoal', 'dark grey', 'dark gray', 'slate', 'indigo', 'teal', 'dark teal', 'dark green', 'burgundy', 'midnight blue', 'forest', 'pine', 'emerald']):
         color_family = 'Dark'
     elif any(c in color_lower for c in ['white', 'grey', 'gray', 'beige', 'cream', 'off-white', 'sand']):
         color_family = 'Neutral'

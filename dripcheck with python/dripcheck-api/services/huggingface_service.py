@@ -14,12 +14,14 @@ backend uses Pillow, Torch and Diffusers at generation time.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import socket
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from io import BytesIO
 from typing import Any
@@ -28,7 +30,15 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-HF_API_BASE_URL = "https://api-inference.huggingface.co/models"
+HF_API_BASE_URL = "https://router.huggingface.co/hf-inference/models"
+
+HF_ROUTER_BASE_URL = "https://router.huggingface.co/fal-ai"
+FAL_QUEUE_MODELS = {"black-forest-labs/FLUX.2-klein-9B"}
+FAL_PROVIDER_MODEL_ROUTES = {
+    "black-forest-labs/FLUX.2-klein-9B": "fal-ai/flux-2/klein/9b/edit",
+}
+FAL_POLL_INTERVAL_SECONDS = 2
+FAL_POLL_MAX_ATTEMPTS = 90
 
 INFERENCE_API_BACKEND = "inference_api"
 DEFAULT_BACKEND = "diffusers"
@@ -136,6 +146,30 @@ def _build_payload(prompt: str) -> dict[str, Any]:
     }
 
 
+def _build_avatar_payload(prompt: str, image_bytes: bytes | None = None) -> dict[str, Any]:
+    """
+    Build an Inference API payload for the configured avatar model.
+
+    `FLUX.2-klein-9B` is an image-to-image model, so the uploaded clothing
+    image is sent as base64 in ``inputs`` and the fashion prompt goes inside
+    ``parameters.prompt``. Falls back to text-to-image when no image is given.
+    """
+    if not image_bytes:
+        return _build_payload(prompt)
+
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    return {
+        "inputs": image_b64,
+        "parameters": {
+            "prompt": prompt,
+            "guidance_scale": DEFAULT_GUIDANCE,
+        },
+        "options": {
+            "wait_for_model": True,
+        },
+    }
+
+
 def _format_json(value: Any) -> str:
     """Pretty-print JSON-compatible values for logs."""
     try:
@@ -153,13 +187,18 @@ def _log_request(
     attempt: int,
 ) -> None:
     """Log the outgoing Hugging Face request."""
+    log_payload = dict(payload)
+    inputs = log_payload.get("inputs")
+    if isinstance(inputs, str) and len(inputs) > 200:
+        log_payload["inputs"] = f"<base64 image, {len(inputs)} chars>"
+
     _debug(
         "\n========== HUGGING FACE ==========\n"
         f"Generating avatar... attempt {attempt}/{MAX_RETRIES}\n\n"
         f"Model:\n{model_id}\n\n"
         f"URL:\n{endpoint}\n\n"
         f"Prompt:\n{prompt}\n\n"
-        f"Payload:\n{_format_json(payload)}\n\n"
+        f"Payload:\n{_format_json(log_payload)}\n\n"
         f"Headers:\n{_format_json(_redacted_headers(headers))}"
     )
 
@@ -441,6 +480,231 @@ def _generate_with_retry(
     return None
 
 
+def _detect_image_mime(image_bytes: bytes) -> str:
+    """Return the image/* content type for the given image bytes."""
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    return "image/jpeg"
+
+
+def _build_fal_payload(prompt: str, image_bytes: bytes) -> dict[str, Any]:
+    """Build the fal.ai image-to-image payload with a data-URL image."""
+    mime = _detect_image_mime(image_bytes)
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    data_url = f"data:{mime};base64,{image_b64}"
+    return {
+        "image_url": data_url,
+        "image_urls": [data_url],
+        "prompt": prompt,
+        "guidance_scale": DEFAULT_GUIDANCE,
+    }
+
+
+def _redact_fal_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of the fal payload safe for console output."""
+    redacted = dict(payload)
+    for key in ("image_url", "image_urls"):
+        value = redacted.get(key)
+        if isinstance(value, str):
+            redacted[key] = f"<base64 image, {len(value)} chars>"
+        elif isinstance(value, list):
+            redacted[key] = [
+                f"<base64 image, {len(item)} chars>" if isinstance(item, str) else item
+                for item in value
+            ]
+    return redacted
+
+
+def _fal_request(
+    endpoint: str,
+    headers: dict[str, str],
+    payload: dict[str, Any] | None,
+    method: str = "POST",
+) -> tuple[int, dict[str, str], str, bytes]:
+    """Perform an HTTP call to the fal.ai router and return response details."""
+    req_body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(endpoint, data=req_body, headers=headers, method=method)
+    with urllib.request.urlopen(request, context=ssl_context, timeout=DEFAULT_TIMEOUT) as response:
+        body = response.read()
+        response_headers = dict(response.headers.items())
+        content_type = response.headers.get("Content-Type", "")
+        status_code = getattr(response, "status", response.getcode())
+        return status_code, response_headers, content_type, body
+
+
+def _fal_queue_urls(submit_data: dict[str, Any]) -> tuple[str, str]:
+    """Derive the router status/result URLs from the fal.ai submit response."""
+    response_url = submit_data.get("response_url", "")
+    path = urllib.parse.urlparse(response_url).path
+    return (
+        f"{HF_ROUTER_BASE_URL}{path}/status?_subdomain=queue",
+        f"{HF_ROUTER_BASE_URL}{path}?_subdomain=queue",
+    )
+
+
+def _finish_fal_failure(started_at: float) -> None:
+    """Log a consistent failure summary for the fal.ai flow."""
+    elapsed = time.monotonic() - started_at
+    _error(f"Avatar generation failed after {elapsed:.2f} seconds.")
+
+
+def generate_avatar_image_fal(
+    prompt: str,
+    image_bytes: bytes,
+    api_token: str,
+    model_id: str,
+) -> bytes | None:
+    """Generate an avatar with fal.ai image-to-image via the HF router queue.
+
+    FLUX.2-klein-9B is served on fal.ai as an async queue endpoint, so we
+    submit the job, poll its status, then download the finished image.
+    """
+    started_at = time.monotonic()
+    provider_model_route = FAL_PROVIDER_MODEL_ROUTES.get(model_id)
+    if not provider_model_route:
+        _error(f"No fal.ai provider route configured for model {model_id}.")
+        return None
+
+    headers = _build_headers(api_token)
+    submit_url = f"{HF_ROUTER_BASE_URL}/{provider_model_route}?_subdomain=queue"
+    payload = _build_fal_payload(prompt, image_bytes)
+
+    _debug(
+        "\n========== HUGGING FACE (fal.ai QUEUE) ==========\n"
+        f"Generating avatar...\n\n"
+        f"Model:\n{model_id}\n\n"
+        f"URL:\n{submit_url}\n\n"
+        f"Prompt:\n{prompt}\n\n"
+        f"Payload:\n{_format_json(_redact_fal_payload(payload))}\n\n"
+        f"Headers:\n{_format_json(_redacted_headers(headers))}"
+    )
+
+    try:
+        status_code, response_headers, content_type, body = _fal_request(
+            submit_url, headers, payload
+        )
+    except urllib.error.HTTPError as exc:
+        response_headers, content_type, body = _read_http_error(exc)
+        _log_response(exc.code, response_headers, content_type, body)
+        data = _parse_json_error(body) if _is_json_content_type(content_type) else None
+        _log_actionable_http_error(exc.code, data)
+        _finish_fal_failure(started_at)
+        return None
+    except (urllib.error.URLError, socket.timeout, TimeoutError, ssl.SSLError) as exc:
+        _error("HF network/URL error during fal.ai submit", exc)
+        _finish_fal_failure(started_at)
+        return None
+
+    _log_response(status_code, response_headers, content_type, body)
+
+    if not _is_json_content_type(content_type):
+        _error(f"fal.ai submit returned unexpected content type: {content_type or 'unknown'}.")
+        _finish_fal_failure(started_at)
+        return None
+
+    if status_code >= 400:
+        data = _parse_json_error(body)
+        _log_actionable_http_error(status_code, data)
+        _finish_fal_failure(started_at)
+        return None
+
+    submit_data = _parse_json_error(body) or {}
+    request_id = submit_data.get("request_id")
+    if not request_id:
+        _error(f"fal.ai submit response did not include a request_id: {_format_json(submit_data)}")
+        _finish_fal_failure(started_at)
+        return None
+
+    status_url, result_url = _fal_queue_urls(submit_data)
+    _debug(f"fal.ai job {request_id} submitted. Polling status...")
+
+    final_status = None
+    for _ in range(FAL_POLL_MAX_ATTEMPTS):
+        time.sleep(FAL_POLL_INTERVAL_SECONDS)
+        try:
+            code, s_headers, s_type, s_body = _fal_request(status_url, headers, None, method="GET")
+        except urllib.error.HTTPError as exc:
+            _log_response(exc.code, *_read_http_error(exc))
+            break
+        except (urllib.error.URLError, socket.timeout, TimeoutError, ssl.SSLError) as exc:
+            _error("HF network error polling fal.ai job status", exc)
+            break
+
+        if not _is_json_content_type(s_type) or code >= 400:
+            _log_response(code, s_headers, s_type, s_body)
+            break
+
+        data = _parse_json_error(s_body) or {}
+        final_status = data.get("status")
+        _debug(f"fal.ai job {request_id} status: {final_status}")
+        if final_status == "COMPLETED":
+            break
+        if final_status in {"ERROR", "CANCELLED", "TIMEOUT"}:
+            _error(f"fal.ai job failed with status {final_status}: {_format_json(data)}")
+            _finish_fal_failure(started_at)
+            return None
+    else:
+        _error(f"Timed out polling fal.ai job {request_id} after {FAL_POLL_MAX_ATTEMPTS} polls.")
+        _finish_fal_failure(started_at)
+        return None
+
+    if final_status != "COMPLETED":
+        _error(f"fal.ai job {request_id} did not complete (status: {final_status}).")
+        _finish_fal_failure(started_at)
+        return None
+
+    try:
+        code, r_headers, r_type, r_body = _fal_request(result_url, headers, None, method="GET")
+    except urllib.error.HTTPError as exc:
+        _log_response(exc.code, *_read_http_error(exc))
+        _finish_fal_failure(started_at)
+        return None
+    except (urllib.error.URLError, socket.timeout, TimeoutError, ssl.SSLError) as exc:
+        _error("HF network error fetching fal.ai job result", exc)
+        _finish_fal_failure(started_at)
+        return None
+
+    _log_response(code, r_headers, r_type, r_body)
+    if code >= 400 or not _is_json_content_type(r_type):
+        _error(f"fal.ai result fetch failed (HTTP {code}).")
+        _finish_fal_failure(started_at)
+        return None
+
+    result = _parse_json_error(r_body) or {}
+    images = result.get("images") or []
+    if not images or not isinstance(images[0], dict) or not images[0].get("url"):
+        _error(f"fal.ai result did not include an image URL: {_format_json(result)}")
+        _finish_fal_failure(started_at)
+        return None
+
+    image_url = images[0]["url"]
+    _debug(f"fal.ai generated image URL: {image_url}")
+
+    try:
+        download_request = urllib.request.Request(image_url, headers={"Accept": "image/jpeg, image/png"})
+        with urllib.request.urlopen(
+            download_request, context=ssl_context, timeout=DEFAULT_TIMEOUT
+        ) as response:
+            downloaded = response.read()
+    except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, TimeoutError, ssl.SSLError) as exc:
+        _error("Failed to download fal.ai output image", exc)
+        _finish_fal_failure(started_at)
+        return None
+
+    if not _looks_like_image(downloaded, _detect_image_mime(downloaded)):
+        _finish_fal_failure(started_at)
+        return None
+
+    elapsed = time.monotonic() - started_at
+    _debug(
+        "\nImage Size:\n"
+        f"{len(downloaded)} bytes\n\n"
+        f"Execution Time:\n{elapsed:.2f} seconds\n\n"
+        "Avatar generation successful. Returning image bytes to Django."
+    )
+    return downloaded
+
+
 def generate_avatar_image(prompt: str, image_bytes: bytes | None = None) -> bytes | None:
     """
     Generate an avatar image using the configured Hugging Face backend.
@@ -469,9 +733,15 @@ def generate_avatar_image(prompt: str, image_bytes: bytes | None = None) -> byte
         )
         return None
 
+    if model_id in FAL_QUEUE_MODELS:
+        if not image_bytes:
+            _error("fal.ai image-to-image requires the uploaded image bytes.")
+            return None
+        return generate_avatar_image_fal(prompt, image_bytes, api_token, model_id)
+
     endpoint = _build_endpoint(model_id)
     headers = _build_headers(api_token)
-    payload = _build_payload(prompt)
+    payload = _build_avatar_payload(prompt, image_bytes)
 
     return _generate_with_retry(model_id, endpoint, prompt, headers, payload)
 
@@ -709,6 +979,9 @@ def build_avatar_prompt(
         "studio lighting, soft shadows, white seamless background, fashion editorial, "
         "photorealistic, high detail, detailed fabric textures, color coordinated outfit, "
         "modern styling, luxury fashion photography, 8k.\n\n"
+        "The model fills the frame from head to toe. The garment from the input image must "
+        "be recreated exactly as shown — same color, same design, same fabric — and worn "
+        "naturally on the model's body.\n\n"
         "Wearing:\n"
         f"Top: {outfit_parts['top']}.\n"
         f"Bottom: {outfit_parts['bottom']}.\n"

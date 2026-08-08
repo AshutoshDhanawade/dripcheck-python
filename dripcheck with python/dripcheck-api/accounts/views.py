@@ -8,11 +8,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from .authentication import BearerTokenAuthentication
 from .serializers import SignupSerializer, VerifyOTPSerializer, LoginSerializer, OnboardingQuestionSerializer, OnboardingSubmitSerializer
-from .models import User, OTPRecord, OnboardingQuestion, UserOnboardingResponse, UserToken
-from api.models import WardrobeItem
+from accounts.models import User, OTPRecord, OnboardingQuestion, UserOnboardingResponse, UserToken
+from api.models import WardrobeItem, UserProfile
 from api.serializers import WardrobeItemSerializer
-from bundle_generate.models import MerchantProduct
-from bundle_generate.serializers import MerchantProductSerializer
+from engine.wardrobe_profile import onboarding_responses_to_preferences
 
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -77,6 +76,50 @@ def build_question_answer_responses(responses, answer_mapper=simplify_onboarding
         formatted_responses[formatted_key] = answer_mapper(answer)
 
     return formatted_responses
+
+
+def sync_user_profile_from_onboarding(user, responses):
+    """Write onboarding answers into the structured UserProfile fields.
+
+    Keeps the personalization engine (which reads ``UserProfile``) in sync
+    with the questionnaire answers stored in ``UserOnboardingResponse``.
+    """
+    preferences = onboarding_responses_to_preferences(responses or {})
+    if not preferences:
+        return None
+
+    profile, _ = UserProfile.objects.get_or_create(
+        user=user,
+        defaults={
+            'username': user.full_name or user.mobile_no,
+            'email': user.email or '',
+            'style_vibes': preferences.get('style_vibes', []),
+            'favorite_colors': preferences.get('favorite_colors', []),
+            'fit_preferences': preferences.get('fit_preferences', []),
+            'pattern_preferences': preferences.get('pattern_preferences', []),
+            'onboarding_complete': getattr(user, 'is_onboarded', False),
+        },
+    )
+
+    changed = False
+    for field, value in preferences.items():
+        if field in ('style_vibes', 'favorite_colors', 'fit_preferences', 'pattern_preferences') and value:
+            if getattr(profile, field, None) != value:
+                setattr(profile, field, value)
+                changed = True
+    if getattr(profile, 'username', None) != (user.full_name or user.mobile_no):
+        profile.username = user.full_name or user.mobile_no
+        changed = True
+    if getattr(profile, 'email', None) != (user.email or ''):
+        profile.email = user.email or ''
+        changed = True
+    if getattr(profile, 'onboarding_complete', None) != getattr(user, 'is_onboarded', False):
+        profile.onboarding_complete = getattr(user, 'is_onboarded', False)
+        changed = True
+
+    if changed:
+        profile.save()
+    return profile
 
 class SignupView(APIView):
     authentication_classes = []
@@ -328,6 +371,10 @@ class OnboardingSubmitView(APIView):
                 user.is_onboarded = all_answers_true
                 user.save()
 
+                # Keep UserProfile in sync with the questionnaire answers so the
+                # personalization engine can use them in bundle generation.
+                sync_user_profile_from_onboarding(user, normalized_responses)
+
                 return Response({
                     "message": "Onboarding updated successfully." if not all_answers_true else "Onboarding completed successfully.",
                     "show_onboarding": not all_answers_true,
@@ -379,6 +426,10 @@ class PublicOnboardingSubmitView(APIView):
                 # Assume onboarding is complete if submission is made
                 user.is_onboarded = True
                 user.save()
+
+                # Keep UserProfile in sync with the questionnaire answers so the
+                # personalization engine can use them in bundle generation.
+                sync_user_profile_from_onboarding(user, formatted_responses)
 
                 return Response({
                     "message": "Onboarding completed successfully.",

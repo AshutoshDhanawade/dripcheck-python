@@ -424,7 +424,7 @@ def generate_bundles(
 
         bundles.append(OutfitBundle(
             bundle_id=f"GEN-{rand_str}",
-            user_id=user_id,
+            user_id=None,
             items=[i.item_id for i in combo['items']],
             compatibility_score=combo['score'],
             dominant_color=combo['dominantColor'],
