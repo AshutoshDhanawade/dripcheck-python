@@ -25,7 +25,8 @@ from rest_framework import status
 
 from api.models import OutfitBundle, WardrobeItem, UserProfile, MarketplaceBundle
 from api.serializers import OutfitBundleSerializer, MarketplaceBundleSerializer
-from engine.compatibility_engine import generate_bundles
+from engine.recommendation_engine import RecommendationEngine
+from engine.wardrobe_profile import preferences_for_user
 
 
 class BundleListView(APIView):
@@ -50,16 +51,29 @@ class BundleListView(APIView):
 
         # ── User wardrobe & preferences ───────────────────────────────────────
         user_wardrobe = list(WardrobeItem.objects.filter(user=request.user))
-        try:
-            user_profile = UserProfile.objects.get(user=request.user)
-            avoided_colors = user_profile.avoided_colors or []
-        except UserProfile.DoesNotExist:
-            avoided_colors = []
+        preferences = preferences_for_user(request.user)
+        avoided_colors = preferences.get('avoided_colors', [])
 
-        # ── Engine-generated bundles ──────────────────────────────────────────
-        generated_bundles = generate_bundles(
-            str(request.user.user_uid), user_wardrobe, occasion, avoided_colors
+        # ── Personalized bundle generation ────────────────────────────────────
+        # The new personalization layer ranks the user's wardrobe by relevance,
+        # keeps only the top-K most relevant items, feeds them into the existing
+        # compatibility engine, then blends compatibility + personalization into
+        # the final ranking. Onboarding preferences are merged by the profile
+        # builder.
+        recommendation_engine = RecommendationEngine(top_k=40)
+        recommendation_result = recommendation_engine.recommend(
+            items=user_wardrobe,
+            user_profile=preferences,
+            user_id=str(request.user.user_uid),
+            occasion_filter=occasion,
+            avoided_colors=avoided_colors,
         )
+        generated_bundles = [scored.bundle for scored in recommendation_result.bundles]
+        # Track the blended final score per generated bundle for later sorting.
+        final_score_by_id = {
+            scored.bundle.bundle_id: scored.final_score
+            for scored in recommendation_result.bundles
+        }
 
         # ── Merge & deduplicate by sorted item list ───────────────────────────
         all_bundles = stored_bundles + generated_bundles
@@ -71,8 +85,11 @@ class BundleListView(APIView):
                 seen.add(key)
                 deduplicated.append(bundle)
 
-        # ── Sort by compatibility score (highest first) ────────────────────────
-        deduplicated.sort(key=lambda b: b.compatibility_score, reverse=True)
+        # ── Sort by blended score (personalized), falling back to compatibility ─
+        deduplicated.sort(
+            key=lambda b: final_score_by_id.get(b.bundle_id, b.compatibility_score),
+            reverse=True,
+        )
 
         # ── Serialize (ORM objects use serializer; raw dicts pass through) ─────
         response_data = []

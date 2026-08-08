@@ -159,7 +159,7 @@ GEMINI_API_KEY = config('GEMINI_API_KEY')
 # Hugging Face avatar generation settings
 HF_API_TOKEN = config('HF_API_TOKEN', default='')
 HF_MODEL_ID = config('HF_MODEL_ID', default='Qwen/Qwen-Image-Edit')
-HF_GENERATION_BACKEND = config('HF_GENERATION_BACKEND', default='diffusers')
+HF_GENERATION_BACKEND = config('HF_GENERATION_BACKEND', default='inference_api')
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 # Routes all project loggers (api, services, engine, etc.) to the console.
