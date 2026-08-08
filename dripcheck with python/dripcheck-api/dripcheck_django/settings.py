@@ -19,7 +19,7 @@ from decouple import config
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(Path(__file__).resolve().parent / ".env")
+load_dotenv(BASE_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production
@@ -94,7 +94,7 @@ WSGI_APPLICATION = 'dripcheck_django.wsgi.application'
 #}
 
 DATABASES = {
-    "default": dj_database_url.parse(os.getenv("DATABASE_URL"))
+    "default": dj_database_url.parse(os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/db.sqlite3"))
 }
 print("DATABASES",DATABASES)
 # Password validation

@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from api.models import Category, WardrobeItem
-from .services import generate_ai_bundles, get_ai_candidates, serialize_item
+from .services import generate_ai_suggestions, get_ai_candidates, serialize_item
 
 
 class AISuggestionBaseView(APIView):
@@ -31,14 +31,31 @@ class AISuggestionBaseView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        bundles, best_ai_item, error = generate_ai_bundles(self.category, wardrobe_items, ai_candidates)
+        suggestions, error = generate_ai_suggestions(self.category, wardrobe_items, ai_candidates)
         if error:
             return Response({"detail": error}, status=status.HTTP_400_BAD_REQUEST)
 
+        if not suggestions:
+            return Response(
+                {"detail": "No AI suggestions available for this category."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        best = suggestions[0]
+
         return Response({
             "category": self.category,
-            "recommended_item": serialize_item(best_ai_item, is_ai=True),
-            "bundles": bundles,
+            "recommended_item": serialize_item(best["product"], is_ai=True),
+            "bundle_count": best["bundle_count"],
+            "bundles": best["bundles"],
+            "suggestions": [
+                {
+                    "product": serialize_item(s["product"], is_ai=True),
+                    "bundle_count": s["bundle_count"],
+                    "bundles": s["bundles"],
+                }
+                for s in suggestions
+            ],
         }, status=status.HTTP_200_OK)
 
     def get(self, request):

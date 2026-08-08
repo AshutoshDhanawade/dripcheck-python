@@ -7,6 +7,7 @@ from .views import (
     OnboardingQuestionsView,
     OnboardingSubmitView,
     PublicOnboardingSubmitView,
+    OnboardingPreferencesView,
 )
 
 urlpatterns = [
@@ -17,4 +18,5 @@ urlpatterns = [
     path('onboarding/questions/', OnboardingQuestionsView.as_view(), name='onboarding_questions'),
     path('onboarding/submit/', OnboardingSubmitView.as_view(), name='onboarding_submit'),
     path('onboarding/public-submit/', PublicOnboardingSubmitView.as_view(), name='public_onboarding_submit'),
+    path('onboarding/preferences/', OnboardingPreferencesView.as_view(), name='onboarding_preferences'),
 ]

@@ -9,6 +9,7 @@ from .views import (
 )
 from .views_upload import AddProductLinkView, UploadProductView, ApproveProductView
 from .views_avatar import GenerateAvatarView
+from .views_wishlist import WishlistView
 # Bundle & Marketplace views are now served from the converted DRF module
 from bundlegeneration import BundleListView, SaveBundleView, MarketplaceView
 
@@ -40,4 +41,7 @@ urlpatterns = [
 
     # ── Frontend Logs ─────────────────────────────────────────────────────────
     path('logs', FrontendLogView.as_view(), name='frontend-logs'),
+
+    # ── Wishlist ──────────────────────────────────────────────────────────────
+    path('wishlist/', WishlistView.as_view(), name='wishlist'),
 ]

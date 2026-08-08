@@ -11,6 +11,7 @@ from engine.compatibility_engine import (
     get_harmony_tier,
     PRIMARY_COLOR_TO_FAMILY,
 )
+from .bundle_unlock import generate_bundles_for_product, blend_unlock_boost
 
 AI_MODEL_MAP = {
     Category.TOP: TopwearAiRecommendation,
@@ -126,79 +127,109 @@ def build_bundle(combo, score_result):
     }
 
 
-def generate_ai_bundles(category, wardrobe_items, ai_candidates, min_bundles=5, max_bundles=8, max_per_category=10):
-    complement_categories = COMPLEMENT_CATEGORIES[category]
+def evaluate_product_candidates(category, wardrobe_items, ai_candidates, max_per_category=10, max_bundles=None):
+    """Score every AI candidate against the user's wardrobe.
 
-    def top_items(cat):
-        return sorted(
-            (item for item in wardrobe_items if item.category == cat),
-            key=lambda i: (i.wear_count or 0, i.last_worn or ''),
-            reverse=True,
-        )[:max_per_category]
+    Returns (scores, error). `scores` is a best-first list of
+    (rank_score, ai_item, combos, score_results) — one entry per product that
+    unlocks at least one valid bundle. Each rank blends the product's best
+    single match with a bounded unlock bonus (see bundle_unlock.blend_unlock_boost):
 
-    first_items = top_items(complement_categories[0])
-    second_items = top_items(complement_categories[1])
+        rank = best_match_score + unlock boost
 
-    if not first_items or not second_items:
-        return None, None, f"User has no {'/'.join(complement_categories)} items in their wardrobe."
-
-    valid_pairs = [
-        (first, second)
-        for first in first_items
-        for second in second_items
-        if calculate_compatibility_score([first, second])['is_valid']
-    ]
-    if not valid_pairs:
-        return None, None, "No compatible combinations found in the user's wardrobe."
-
-    candidates_combos = []
-    best_ai_item = None
-    best_score = -1
+    The unlock boost never overrides compatibility — it only breaks ties in
+    favour of products that unlock more outfits.
+    """
+    scores = []
 
     for ai_item in ai_candidates:
-        combos = []
-        for first, second in valid_pairs:
-            combo = [ai_item, first, second]
-            score_result = calculate_compatibility_score(combo)
-            if not score_result['is_valid']:
-                continue
-            combos.append((combo, score_result))
-
+        combos = generate_bundles_for_product(
+            ai_item,
+            wardrobe_items,
+            max_per_category=max_per_category,
+            max_bundles=max_bundles,
+        )
         if not combos:
-            continue
+            continue  # No valid bundle → do not recommend this product.
 
-        combos.sort(key=lambda c: c[1]['score'], reverse=True)
-        candidates_combos.append((ai_item, combos))
+        score_results = [calculate_compatibility_score(combo) for combo in combos]
+        best_match_score = max(result['score'] for result in score_results)
+        rank_score = blend_unlock_boost(best_match_score, len(combos))
+        scores.append((rank_score, ai_item, combos, score_results))
 
-        if combos[0][1]['score'] > best_score:
-            best_score = combos[0][1]['score']
-            best_ai_item = ai_item
+    if not scores:
+        return None, "No compatible AI product unlocks bundles for the user's wardrobe."
 
-    if best_ai_item is None:
-        return None, None, "No compatible AI item found for the user's wardrobe."
+    scores.sort(key=lambda entry: entry[0], reverse=True)
+    return scores, None
 
-    bundles = []
-    seen = set()
-    pool = [combos for _, combos in candidates_combos]
-    idx = 0
-    while len(bundles) < max_bundles:
-        added = False
-        for combos in pool:
-            if idx < len(combos):
-                combo, score_result = combos[idx]
-                dedupe_key = tuple(sorted(item.item_id for item in combo))
-                if dedupe_key not in seen:
-                    seen.add(dedupe_key)
-                    bundles.append(build_bundle(combo, score_result))
-                    added = True
-                if len(bundles) >= max_bundles:
-                    break
-        if not added:
-            break
-        idx += 1
 
-    if len(bundles) < min_bundles:
+def generate_ai_suggestions(category, wardrobe_items, ai_candidates, top_k=4, max_bundles=8, max_per_category=10):
+    """Rank AI products and return per-product bundles, best product first.
+
+    Each entry in the returned list is
+
+        {"product": ai_item, "bundle_count": n, "bundles": [...]}
+
+    where "bundles" is the single source of truth for both that product's
+    unlock count and its 'Show all bundles' exploration view. `top_k` limits
+    how many products are surfaced to the client.
+    """
+    complement_categories = COMPLEMENT_CATEGORIES[category]
+
+    first_cat_items = [i for i in wardrobe_items if i.category == complement_categories[0]]
+    second_cat_items = [i for i in wardrobe_items if i.category == complement_categories[1]]
+
+    if not first_cat_items or not second_cat_items:
+        return None, f"User has no {'/'.join(complement_categories)} items in their wardrobe."
+
+    scores, error = evaluate_product_candidates(
+        category,
+        wardrobe_items,
+        ai_candidates,
+        max_per_category=max_per_category,
+        max_bundles=max_bundles,
+    )
+    if error:
+        return None, error
+
+    suggestions = []
+    for _, ai_item, combos, score_results in scores[:top_k]:
+        ordered = sorted(
+            zip(combos, score_results),
+            key=lambda pair: pair[1]['score'],
+            reverse=True,
+        )
+        bundles = [build_bundle(combo, result) for combo, result in ordered]
+        suggestions.append({
+            'product': ai_item,
+            'bundle_count': len(bundles),
+            'bundles': bundles,
+        })
+
+    return suggestions, None
+
+
+def generate_ai_bundles(category, wardrobe_items, ai_candidates, min_bundles=1, max_bundles=8, max_per_category=10):
+    """Backward-compatible wrapper returning only the best product's bundles.
+
+    Keeps the original call signature so external callers (and tests) still
+    work — the best suggestion from generate_ai_suggestions() is returned.
+    """
+    suggestions, error = generate_ai_suggestions(
+        category,
+        wardrobe_items,
+        ai_candidates,
+        top_k=1,
+        max_bundles=max_bundles,
+        max_per_category=max_per_category,
+    )
+    if error:
+        return None, None, error
+
+    best = suggestions[0]
+    if len(best['bundles']) < min_bundles:
         return None, None, "Not enough compatible combinations found in the user's wardrobe."
 
-    bundles.sort(key=lambda b: b['match_score'], reverse=True)
-    return bundles[:max_bundles], best_ai_item, None
+    return best['bundles'], best['product'], None
+

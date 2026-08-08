@@ -444,3 +444,58 @@ class PublicOnboardingSubmitView(APIView):
                 {"error": "An unexpected error occurred during public onboarding submission.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+class OnboardingPreferencesView(APIView):
+    authentication_classes = [BearerTokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            questions = OnboardingQuestion.objects.filter(is_active=True).order_by('order')
+            onboarding_response = getattr(request.user, 'onboarding_response', None)
+            user_answers = onboarding_response.responses if onboarding_response else {}
+
+            question_data = []
+            for q in questions:
+                options = [{"id": opt.id, "text": opt.text, "is_other": opt.is_other} for opt in q.options.all()]
+                question_data.append({
+                    "id": q.id,
+                    "question_text": q.text,
+                    "question_type": q.question_type,
+                    "options": options,
+                    "user_answer": user_answers.get(q.text, user_answers.get(str(q.id), None)),
+                })
+
+            return Response({"questions": question_data}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"error": "An unexpected error occurred while fetching preferences.", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def post(self, request):
+        try:
+            serializer = OnboardingSubmitSerializer(data=request.data)
+            if serializer.is_valid():
+                responses = serializer.validated_data['responses']
+                user = request.user
+
+                normalized_responses = build_question_answer_responses(responses)
+
+                UserOnboardingResponse.objects.update_or_create(
+                    user=user,
+                    defaults={'responses': normalized_responses}
+                )
+
+                user.is_onboarded = True
+                user.save()
+
+                sync_user_profile_from_onboarding(user, normalized_responses)
+
+                return Response({"message": "Preferences updated successfully."}, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"error": "An unexpected error occurred while updating preferences.", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

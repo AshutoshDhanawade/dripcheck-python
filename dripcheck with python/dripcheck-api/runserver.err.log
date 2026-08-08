@@ -1,0 +1,138 @@
+[36m02:03:53[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/login/
+[36m02:03:55[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /auth/login/
+[36m02:03:55[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:03:55[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/bundles/
+[36m02:03:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:03:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:03:57[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/bundles/
+[36m02:03:57[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/bundles/
+[36m02:03:57[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:03:58[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/bundles/
+[36m02:09:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:09:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 401 GET /api/wardrobe/
+[36m02:09:28[0m [1mWARNING [0m [33mdjango.server[0m  "GET //api/wardrobe/ HTTP/1.1" 401 172
+[36m02:09:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:09:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 401 GET /api/wardrobe/
+[36m02:09:28[0m [1mWARNING [0m [33mdjango.server[0m  "GET //api/wardrobe/ HTTP/1.1" 401 172
+[36m02:09:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/token/refresh/
+[36m02:09:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/token/refresh/
+[36m02:09:29[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /auth/token/refresh/
+[36m02:09:29[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:09:29[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /auth/token/refresh/
+[36m02:09:30[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:09:30[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:09:31[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:09:35[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:09:37[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:09:37[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:09:37[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /media/wardrobe/gen_7f802268-9621-4f88-ada9-1a85bd8c79cc.jpeg
+[36m02:09:37[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /media/wardrobe/link_cc2e693c-7cea-4be5-b0f5-330bd863318e.webp
+[36m02:09:37[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /media/wardrobe/link_c14957f2-1919-4316-8f76-285ac3df82ef.webp
+[36m02:09:37[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 404 GET /media/wardrobe/gen_7f802268-9621-4f88-ada9-1a85bd8c79cc.jpeg
+[36m02:09:37[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 404 GET /media/wardrobe/link_cc2e693c-7cea-4be5-b0f5-330bd863318e.webp
+[36m02:09:37[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 404 GET /media/wardrobe/link_c14957f2-1919-4316-8f76-285ac3df82ef.webp
+[36m02:09:37[0m [1mWARNING [0m [33mdjango.server[0m  "GET /media/wardrobe/gen_7f802268-9621-4f88-ada9-1a85bd8c79cc.jpeg HTTP/1.1" 404 3448
+[36m02:09:37[0m [1mWARNING [0m [33mdjango.server[0m  "GET /media/wardrobe/link_cc2e693c-7cea-4be5-b0f5-330bd863318e.webp HTTP/1.1" 404 3452
+[36m02:09:37[0m [1mWARNING [0m [33mdjango.server[0m  "GET /media/wardrobe/link_c14957f2-1919-4316-8f76-285ac3df82ef.webp HTTP/1.1" 404 3452
+[36m02:09:38[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:09:38[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:09:40[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:09:40[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:09:40[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /media/wardrobe/gen_7f802268-9621-4f88-ada9-1a85bd8c79cc.jpeg
+[36m02:09:40[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 404 GET /media/wardrobe/gen_7f802268-9621-4f88-ada9-1a85bd8c79cc.jpeg
+[36m02:09:40[0m [1mWARNING [0m [33mdjango.server[0m  "GET /media/wardrobe/gen_7f802268-9621-4f88-ada9-1a85bd8c79cc.jpeg HTTP/1.1" 404 3448
+[36m02:09:40[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /media/wardrobe/link_cc2e693c-7cea-4be5-b0f5-330bd863318e.webp
+[36m02:09:40[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /media/wardrobe/link_c14957f2-1919-4316-8f76-285ac3df82ef.webp
+[36m02:09:40[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 404 GET /media/wardrobe/link_cc2e693c-7cea-4be5-b0f5-330bd863318e.webp
+[36m02:09:40[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 404 GET /media/wardrobe/link_c14957f2-1919-4316-8f76-285ac3df82ef.webp
+[36m02:09:40[0m [1mWARNING [0m [33mdjango.server[0m  "GET /media/wardrobe/link_cc2e693c-7cea-4be5-b0f5-330bd863318e.webp HTTP/1.1" 404 3452
+[36m02:09:40[0m [1mWARNING [0m [33mdjango.server[0m  "GET /media/wardrobe/link_c14957f2-1919-4316-8f76-285ac3df82ef.webp HTTP/1.1" 404 3452
+[36m02:09:41[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:09:42[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:09:43[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:09:43[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:09:45[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:10:39[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:10:41[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:10:41[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:10:42[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:11:25[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:11:25[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:11:26[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:11:26[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:28:18[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/onboarding/public-submit/
+[36m02:28:18[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 400 POST /auth/onboarding/public-submit/
+[36m02:28:18[0m [1mWARNING [0m [33mdjango.server[0m  "POST //auth/onboarding/public-submit/ HTTP/1.1" 400 34
+[36m02:28:18[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/logs
+[36m02:28:18[0m [1mERROR   [0m [33mfrontend[0m  [Frontend ERROR] Url: http://localhost:5173/ | Message: Failed to update profile: {"status":400,"data":{"error":"mobile_no is required."}}
+[36m02:28:18[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/logs
+[36m02:28:27[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/onboarding/public-submit/
+[36m02:28:27[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 400 POST /auth/onboarding/public-submit/
+[36m02:28:27[0m [1mWARNING [0m [33mdjango.server[0m  "POST //auth/onboarding/public-submit/ HTTP/1.1" 400 34
+[36m02:28:27[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/logs
+[36m02:28:27[0m [1mERROR   [0m [33mfrontend[0m  [Frontend ERROR] Url: http://localhost:5173/ | Message: Failed to update profile: {"status":400,"data":{"error":"mobile_no is required."}}
+[36m02:28:27[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/logs
+[36m02:28:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/onboarding/public-submit/
+[36m02:28:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 400 POST /auth/onboarding/public-submit/
+[36m02:28:28[0m [1mWARNING [0m [33mdjango.server[0m  "POST //auth/onboarding/public-submit/ HTTP/1.1" 400 34
+[36m02:28:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/logs
+[36m02:28:28[0m [1mERROR   [0m [33mfrontend[0m  [Frontend ERROR] Url: http://localhost:5173/ | Message: Failed to update profile: {"status":400,"data":{"error":"mobile_no is required."}}
+[36m02:28:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/logs
+[36m02:28:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/onboarding/public-submit/
+[36m02:28:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 400 POST /auth/onboarding/public-submit/
+[36m02:28:28[0m [1mWARNING [0m [33mdjango.server[0m  "POST //auth/onboarding/public-submit/ HTTP/1.1" 400 34
+[36m02:28:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/logs
+[36m02:28:28[0m [1mERROR   [0m [33mfrontend[0m  [Frontend ERROR] Url: http://localhost:5173/ | Message: Failed to update profile: {"status":400,"data":{"error":"mobile_no is required."}}
+[36m02:28:28[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/logs
+[36m02:28:29[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/onboarding/public-submit/
+[36m02:28:29[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 400 POST /auth/onboarding/public-submit/
+[36m02:28:29[0m [1mWARNING [0m [33mdjango.server[0m  "POST //auth/onboarding/public-submit/ HTTP/1.1" 400 34
+[36m02:28:29[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/logs
+[36m02:28:29[0m [1mERROR   [0m [33mfrontend[0m  [Frontend ERROR] Url: http://localhost:5173/ | Message: Failed to update profile: {"status":400,"data":{"error":"mobile_no is required."}}
+[36m02:28:29[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/logs
+[36m02:28:30[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/onboarding/public-submit/
+[36m02:28:30[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 400 POST /auth/onboarding/public-submit/
+[36m02:28:30[0m [1mWARNING [0m [33mdjango.server[0m  "POST //auth/onboarding/public-submit/ HTTP/1.1" 400 34
+[36m02:28:30[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/logs
+[36m02:28:30[0m [1mERROR   [0m [33mfrontend[0m  [Frontend ERROR] Url: http://localhost:5173/ | Message: Failed to update profile: {"status":400,"data":{"error":"mobile_no is required."}}
+[36m02:28:30[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/logs
+[36m02:28:30[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/onboarding/public-submit/
+[36m02:28:31[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 400 POST /auth/onboarding/public-submit/
+[36m02:28:31[0m [1mWARNING [0m [33mdjango.server[0m  "POST //auth/onboarding/public-submit/ HTTP/1.1" 400 34
+[36m02:28:31[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/logs
+[36m02:28:31[0m [1mERROR   [0m [33mfrontend[0m  [Frontend ERROR] Url: http://localhost:5173/ | Message: Failed to update profile: {"status":400,"data":{"error":"mobile_no is required."}}
+[36m02:28:31[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/logs
+[36m02:34:45[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/logs
+[36m02:34:45[0m [1mINFO    [0m [33mfrontend[0m  [Frontend INFO] Url: http://localhost:5173/ | Message: [vite] server connection lost. Polling for restart...
+[36m02:34:45[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/logs
+[36m02:36:34[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:34[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:34[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 401 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:34[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 401 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:34[0m [1mWARNING [0m [33mdjango.server[0m  "POST //api/ai-generation/topwear-suggestion/ HTTP/1.1" 401 172
+[36m02:36:34[0m [1mWARNING [0m [33mdjango.server[0m  "POST //api/ai-generation/topwear-suggestion/ HTTP/1.1" 401 172
+[36m02:36:34[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/token/refresh/
+[36m02:36:34[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /auth/token/refresh/
+[36m02:36:35[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /auth/token/refresh/
+[36m02:36:35[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /auth/token/refresh/
+[36m02:36:35[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:35[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:37[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:38[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:54[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:36:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:36:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /api/wardrobe/
+[36m02:36:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /media/wardrobe/gen_7f802268-9621-4f88-ada9-1a85bd8c79cc.jpeg
+[36m02:36:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /media/wardrobe/link_cc2e693c-7cea-4be5-b0f5-330bd863318e.webp
+[36m02:36:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 GET /media/wardrobe/link_c14957f2-1919-4316-8f76-285ac3df82ef.webp
+[36m02:36:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 404 GET /media/wardrobe/gen_7f802268-9621-4f88-ada9-1a85bd8c79cc.jpeg
+[36m02:36:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 404 GET /media/wardrobe/link_cc2e693c-7cea-4be5-b0f5-330bd863318e.webp
+[36m02:36:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 404 GET /media/wardrobe/link_c14957f2-1919-4316-8f76-285ac3df82ef.webp
+[36m02:36:56[0m [1mWARNING [0m [33mdjango.server[0m  "GET /media/wardrobe/gen_7f802268-9621-4f88-ada9-1a85bd8c79cc.jpeg HTTP/1.1" 404 3448
+[36m02:36:56[0m [1mWARNING [0m [33mdjango.server[0m  "GET /media/wardrobe/link_cc2e693c-7cea-4be5-b0f5-330bd863318e.webp HTTP/1.1" 404 3452
+[36m02:36:56[0m [1mWARNING [0m [33mdjango.server[0m  "GET /media/wardrobe/link_c14957f2-1919-4316-8f76-285ac3df82ef.webp HTTP/1.1" 404 3452
+[36m02:36:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:56[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2192 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:57[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 GET /api/wardrobe/
+[36m02:36:57[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/ai-generation/topwear-suggestion/
+[36m02:36:58[0m [1mINFO    [0m [33mdripcheck_django.middleware[0m  \u2190 200 POST /api/ai-generation/topwear-suggestion/
