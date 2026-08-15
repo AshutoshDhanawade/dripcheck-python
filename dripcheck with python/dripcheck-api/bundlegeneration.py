@@ -55,12 +55,11 @@ class BundleListView(APIView):
         avoided_colors = preferences.get('avoided_colors', [])
 
         # ── Personalized bundle generation ────────────────────────────────────
-        # The new personalization layer ranks the user's wardrobe by relevance,
-        # keeps only the top-K most relevant items, feeds them into the existing
-        # compatibility engine, then blends compatibility + personalization into
-        # the final ranking. Onboarding preferences are merged by the profile
-        # builder.
-        recommendation_engine = RecommendationEngine(top_k=40)
+        # Every eligible wardrobe item is fed into the engine (no top-K cap,
+        # no per-category limits). The engine generates ALL valid combinations,
+        # scores them, and returns the full list ranked by final score.
+        # Onboarding preferences are merged by the profile builder.
+        recommendation_engine = RecommendationEngine()
         recommendation_result = recommendation_engine.recommend(
             items=user_wardrobe,
             user_profile=preferences,

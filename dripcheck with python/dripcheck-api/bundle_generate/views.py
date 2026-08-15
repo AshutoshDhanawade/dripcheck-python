@@ -13,28 +13,19 @@ from engine.wardrobe_profile import preferences_for_user
 REQUIRED_CATEGORIES = {Category.TOP, Category.BOTTOM, Category.FOOTWEAR}
 
 
-def _fill_missing_categories_items(wardrobe_items, selected_item, max_per_category=8):
+def _fill_missing_categories_items(wardrobe_items, selected_item):
     """Return wardrobe items that fill the categories missing for the selected
     item. Built purely from the user's own wardrobe — no merchant catalog.
+    Uses EVERY eligible item in the missing categories (no per-category cap).
     """
     missing_categories = REQUIRED_CATEGORIES - {selected_item.category}
     if not missing_categories:
         return []
 
-    fill_items = [
+    return [
         item for item in wardrobe_items
         if item.category in missing_categories and item.item_id != selected_item.item_id
     ]
-
-    grouped = {}
-    for item in fill_items:
-        grouped.setdefault(item.category, []).append(item)
-
-    # Cap candidates per category to bound the combinatorial explosion.
-    capped = []
-    for category in missing_categories:
-        capped.extend(grouped.get(category, [])[:max_per_category])
-    return capped
 
 
 class HomepageProductsView(APIView):
@@ -101,7 +92,7 @@ class GenerateFromProductView(APIView):
 
         preferences = preferences_for_user(request.user)
 
-        recommendation_engine = RecommendationEngine(top_k=40)
+        recommendation_engine = RecommendationEngine()
         recommendation_result = recommendation_engine.recommend(
             items=pool,
             user_profile=preferences,
@@ -138,7 +129,7 @@ class GenerateFromWardrobeItemView(APIView):
 
         preferences = preferences_for_user(request.user)
 
-        recommendation_engine = RecommendationEngine(top_k=40)
+        recommendation_engine = RecommendationEngine()
         recommendation_result = recommendation_engine.recommend(
             items=pool,
             user_profile=preferences,

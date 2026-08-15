@@ -6,6 +6,7 @@ from .views import (
     AnalyticsView,
     WearLogView,
     FrontendLogView,
+    WishlistView,
 )
 from .views_upload import AddProductLinkView, UploadProductView, ApproveProductView
 from .views_avatar import GenerateAvatarView
@@ -40,4 +41,7 @@ urlpatterns = [
 
     # ── Frontend Logs ─────────────────────────────────────────────────────────
     path('logs', FrontendLogView.as_view(), name='frontend-logs'),
+
+    # ── Wishlist (liked products & bundles) ───────────────────────────────────
+    path('wishlist/', WishlistView.as_view(), name='wishlist'),
 ]

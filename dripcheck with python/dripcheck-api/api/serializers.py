@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import UserProfile, WardrobeItem, OutfitBundle, WearLog, MarketplaceBundle
+from .models import UserProfile, WardrobeItem, OutfitBundle, WearLog, MarketplaceBundle, WishlistItem
 
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
@@ -24,4 +24,9 @@ class WearLogSerializer(serializers.ModelSerializer):
 class MarketplaceBundleSerializer(serializers.ModelSerializer):
     class Meta:
         model = MarketplaceBundle
+        fields = '__all__'
+
+class WishlistItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WishlistItem
         fields = '__all__'

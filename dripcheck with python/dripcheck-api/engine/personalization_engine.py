@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from api.models import WardrobeItem
+from api.models import OutfitBundle, WardrobeItem
 
 from engine.compatibility_engine import PRIMARY_COLOR_TO_FAMILY
 from engine.wardrobe_profile import (
@@ -38,6 +38,29 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     'season': 0.05,
     'category': 0.10,
     'novelty': 0.20,
+}
+
+# Bundle-level personalization bounds (secondary ranking signal).
+# The base bundle score is ~0–100, so each onboarding component adds at most
+# +10 and the whole bonus is capped at +30 — personalization can only re-rank
+# bundles, never overpower a distinctly better outfit.
+BUNDLE_STYLE_MAX = 10.0
+BUNDLE_CLOTHING_MAX = 10.0
+BUNDLE_COLOR_MAX = 10.0
+MAX_BUNDLE_PERSONALIZATION = BUNDLE_STYLE_MAX + BUNDLE_CLOTHING_MAX + BUNDLE_COLOR_MAX
+
+# Color-family aliases for free-form onboarding answers that lean on families
+# (e.g. "Pastel Shades" maps to the stored ``Pastel`` family).
+COLOR_FAMILY_ALIASES: Dict[str, str] = {
+    'pastel shades': 'Pastel',
+    'pastel': 'Pastel',
+    'earth tones': 'Earth',
+    'earthy': 'Earth',
+    'neutral shades': 'Neutral',
+    'neutrals': 'Neutral',
+    'dark colors': 'Dark',
+    'bold colors': 'Bold',
+    'warm shades': 'Warm',
 }
 
 # Valid component keys; used to reject unknown weights.
@@ -97,6 +120,20 @@ class PersonalizationResult:
     reasons: List[str] = field(default_factory=list)
 
 
+@dataclass
+class BundlePersonalizationResult:
+    """Result of scoring a whole bundle against onboarding preferences.
+
+    ``score`` is the total bounded bonus (max 30) added on top of the base
+    bundle score; ``breakdown`` exposes the per-component sub-scores so the
+    final ranking can be debugged and tuned.
+    """
+
+    score: float
+    breakdown: Dict[str, float]
+    reasons: List[str] = field(default_factory=list)
+
+
 class PersonalizationEngine:
     """Scores wardrobe items for user relevance across eight components.
 
@@ -150,6 +187,162 @@ class PersonalizationEngine:
             components=components,
             reasons=reasons,
         )
+
+    # ------------------------------------------------------------------
+    # Bundle personalization (onboarding preferences only)
+    # ------------------------------------------------------------------
+
+    def score_bundle(
+        self,
+        bundle: OutfitBundle,
+        user_preferences: Optional[Dict[str, Any]] = None,
+        item_lookup: Optional[Dict[str, WardrobeItem]] = None,
+    ) -> BundlePersonalizationResult:
+        """Score one whole bundle against the user's onboarding preferences.
+
+        Uses ONLY onboarding data: fashion styles, clothes worn most, and
+        preferred colors. No purchases / likes / browsing signals are used.
+
+        Each component is bounded to ``BUNDLE_*_MAX`` points and the total to
+        ``MAX_BUNDLE_PERSONALIZATION`` (+30), keeping personalization a
+        secondary ranking signal over the 0–100 base bundle score.
+
+        ``user_preferences`` should be the merged onboarding dict built once
+        per run (e.g. ``profile.onboarding_preferences`` / the dict produced by
+        ``wardrobe_profile.preferences_for_user``). ``item_lookup`` maps the
+        bundle's stored item ids to their ``WardrobeItem`` objects so the
+        bundle's subcategories / colors / styles can be inspected.
+        """
+        prefs = user_preferences or {}
+        item_ids = bundle.items or []
+        items = [
+            item for item in (item_lookup or {}).values()
+            if str(getattr(item, 'item_id', '')) in {str(i) for i in item_ids}
+        ]
+        if not items and item_ids:
+            items = [
+                item_lookup.get(str(i))
+                for i in item_ids
+                if item_lookup.get(str(i)) is not None
+            ]
+
+        bundle_style_tags = _normalized_list(getattr(bundle, 'style_tags', None))
+
+        style_score, style_reasons = self._bundle_style_score(prefs, items, bundle_style_tags)
+        clothing_score, clothing_reasons = self._bundle_clothing_score(prefs, items)
+        color_score, color_reasons = self._bundle_color_score(prefs, items)
+
+        total = clamp(
+            style_score + clothing_score + color_score,
+            0.0,
+            MAX_BUNDLE_PERSONALIZATION,
+        )
+        return BundlePersonalizationResult(
+            score=round(total, 2),
+            breakdown={
+                'style_score': round(style_score, 2),
+                'clothing_score': round(clothing_score, 2),
+                'color_score': round(color_score, 2),
+            },
+            reasons=style_reasons + clothing_reasons + color_reasons,
+        )
+
+    # -- Bundle component 1: style -----------------------------------------
+
+    def _bundle_style_score(
+        self,
+        prefs: Dict[str, Any],
+        items: List[WardrobeItem],
+        bundle_style_tags: List[str],
+    ) -> Tuple[float, List[str]]:
+        preferred = set(_normalized_list(
+            prefs.get('style_vibes') or prefs.get('styles')
+        ))
+        if not preferred:
+            return 0.0, ["No style preferences answered"]
+
+        bundle_styles = set(bundle_style_tags)
+        for item in items:
+            bundle_styles.update(_normalized_list(getattr(item, 'style_tags', None)))
+
+        matched = bundle_styles & preferred
+        if not matched:
+            return 0.0, ["Bundle style(s) not among preferred"]
+
+        coverage = len(matched) / len(preferred)
+        score = BUNDLE_STYLE_MAX * min(coverage, 1.0)
+        return round(score, 2), [f"Style match: {', '.join(sorted(matched)[:3])}"]
+
+    # -- Bundle component 2: clothing categories --------------------------
+
+    def _bundle_clothing_score(
+        self,
+        prefs: Dict[str, Any],
+        items: List[WardrobeItem],
+    ) -> Tuple[float, List[str]]:
+        preferred = set(_normalized_list(
+            prefs.get('preferred_subcategories')
+            or prefs.get('clothes')
+            or prefs.get('preferred_clothes')
+        ))
+        if not preferred:
+            return 0.0, ["No clothing preferences answered"]
+        if not items:
+            return 0.0, ["Cannot resolve bundle items"]
+
+        matched = [
+            item for item in items
+            if _matches_subcategory(
+                str(getattr(item, 'subcategory', '') or '').strip().lower(),
+                preferred,
+            )
+        ]
+        matched_names = {str(getattr(item, 'subcategory', '') or '') for item in matched}
+        score = BUNDLE_CLOTHING_MAX * (len(matched) / len(items))
+        reasons = (
+            [f"Clothing match: {', '.join(sorted(matched_names)[:3])}"]
+            if matched else ["No clothing match"]
+        )
+        return round(score, 2), reasons
+
+    # -- Bundle component 3: colors ----------------------------------------
+
+    def _bundle_color_score(
+        self,
+        prefs: Dict[str, Any],
+        items: List[WardrobeItem],
+    ) -> Tuple[float, List[str]]:
+        raw = prefs.get('favorite_colors') or prefs.get('colors')
+        preferred = set(_normalized_list(raw))
+        preferred_families = set()
+        for color in preferred:
+            family = COLOR_FAMILY_ALIASES.get(color)
+            if family:
+                preferred_families.add(family.lower())
+        if not preferred and not preferred_families:
+            return 0.0, ["No color preferences answered"]
+        if not items:
+            return 0.0, ["Cannot resolve bundle items"]
+
+        matched = []
+        for item in items:
+            primary = str(getattr(item, 'primary_color', '') or '').strip().lower()
+            family = str(getattr(item, 'color_family', '') or '').strip().lower()
+            resolved_family = (resolve_color_family(item) or '').strip().lower()
+            if primary in preferred or family in preferred:
+                matched.append(item)
+            elif family in preferred_families or resolved_family in preferred_families:
+                matched.append(item)
+
+        matched_colors = {
+            str(getattr(item, 'primary_color', '') or '') for item in matched
+        }
+        score = BUNDLE_COLOR_MAX * (len(matched) / len(items))
+        reasons = (
+            [f"Color match: {', '.join(sorted(matched_colors)[:3])}"]
+            if matched else ["No color match"]
+        )
+        return round(score, 2), reasons
 
     # ------------------------------------------------------------------
     # Component 1 — Style similarity (0–100)
@@ -462,3 +655,30 @@ def calculate_personalization_score(
         }
     """
     return PersonalizationEngine(weights=weights).score_item(item, profile, all_items)
+
+
+def calculate_bundle_personalization(
+    bundle: OutfitBundle,
+    user_preferences: Optional[Dict[str, Any]] = None,
+    item_lookup: Optional[Dict[str, WardrobeItem]] = None,
+    weights: Optional[Dict[str, float]] = None,
+) -> BundlePersonalizationResult:
+    """Module-level convenience wrapper for :meth:`PersonalizationEngine.score_bundle`.
+
+    Example result::
+
+        {
+            "personalization_score": 28.0,
+            "breakdown": {
+                "style_score": 10.0,
+                "clothing_score": 10.0,
+                "color_score": 8.0,
+            },
+            "reasons": ["Style match: Streetwear", ...],
+        }
+    """
+    return PersonalizationEngine(weights=weights).score_bundle(
+        bundle=bundle,
+        user_preferences=user_preferences,
+        item_lookup=item_lookup,
+    )

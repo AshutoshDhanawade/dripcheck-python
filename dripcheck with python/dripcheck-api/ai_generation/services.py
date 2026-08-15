@@ -126,76 +126,56 @@ def build_bundle(combo, score_result):
     }
 
 
-def generate_ai_bundles(category, wardrobe_items, ai_candidates, min_bundles=5, max_bundles=8, max_per_category=10):
+def generate_ai_bundles(category, wardrobe_items, ai_candidates, min_bundles=5, max_bundles=8, max_per_category=None):
     complement_categories = COMPLEMENT_CATEGORIES[category]
 
-    def top_items(cat):
-        return sorted(
-            (item for item in wardrobe_items if item.category == cat),
-            key=lambda i: (i.wear_count or 0, i.last_worn or ''),
-            reverse=True,
-        )[:max_per_category]
+    first_items = [item for item in wardrobe_items if item.category == complement_categories[0]]
+    second_items = [item for item in wardrobe_items if item.category == complement_categories[1]]
 
-    first_items = top_items(complement_categories[0])
-    second_items = top_items(complement_categories[1])
+    if max_per_category:
+        sort_key = lambda i: (i.wear_count or 0, i.last_worn or '')
+        first_items = sorted(first_items, key=sort_key, reverse=True)[:max_per_category]
+        second_items = sorted(second_items, key=sort_key, reverse=True)[:max_per_category]
 
     if not first_items or not second_items:
         return None, None, f"User has no {'/'.join(complement_categories)} items in their wardrobe."
 
-    valid_pairs = [
-        (first, second)
-        for first in first_items
-        for second in second_items
-        if calculate_compatibility_score([first, second])['is_valid']
-    ]
-    if not valid_pairs:
-        return None, None, "No compatible combinations found in the user's wardrobe."
-
-    candidates_combos = []
+    # Generate EVERY possible [ai_item, first, second] combination from the full
+    # eligible inventory, validate and score each one. No "maximum similar
+    # bundles" rule stops exploration during generation.
+    scored_combos = []
     best_ai_item = None
     best_score = -1
 
     for ai_item in ai_candidates:
-        combos = []
-        for first, second in valid_pairs:
-            combo = [ai_item, first, second]
-            score_result = calculate_compatibility_score(combo)
-            if not score_result['is_valid']:
-                continue
-            combos.append((combo, score_result))
-
-        if not combos:
-            continue
-
-        combos.sort(key=lambda c: c[1]['score'], reverse=True)
-        candidates_combos.append((ai_item, combos))
-
-        if combos[0][1]['score'] > best_score:
-            best_score = combos[0][1]['score']
-            best_ai_item = ai_item
+        for first in first_items:
+            for second in second_items:
+                combo = [ai_item, first, second]
+                score_result = calculate_compatibility_score(combo)
+                if not score_result['is_valid']:
+                    continue
+                scored_combos.append((combo, score_result))
+                if score_result['score'] > best_score:
+                    best_score = score_result['score']
+                    best_ai_item = ai_item
 
     if best_ai_item is None:
         return None, None, "No compatible AI item found for the user's wardrobe."
 
+    # Score every valid bundle, rank the COMPLETE pool descending, then apply
+    # the result-count limit as a separate post-ranking step.
+    scored_combos.sort(key=lambda c: c[1]['score'], reverse=True)
+
     bundles = []
     seen = set()
-    pool = [combos for _, combos in candidates_combos]
-    idx = 0
-    while len(bundles) < max_bundles:
-        added = False
-        for combos in pool:
-            if idx < len(combos):
-                combo, score_result = combos[idx]
-                dedupe_key = tuple(sorted(item.item_id for item in combo))
-                if dedupe_key not in seen:
-                    seen.add(dedupe_key)
-                    bundles.append(build_bundle(combo, score_result))
-                    added = True
-                if len(bundles) >= max_bundles:
-                    break
-        if not added:
+    for combo, score_result in scored_combos:
+        dedupe_key = tuple(sorted(item.item_id for item in combo))
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        bundles.append(build_bundle(combo, score_result))
+        if len(bundles) >= max_bundles:
             break
-        idx += 1
 
     if len(bundles) < min_bundles:
         return None, None, "Not enough compatible combinations found in the user's wardrobe."

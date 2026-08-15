@@ -149,3 +149,30 @@ class MarketplaceBundle(models.Model):
     occasion_tags = models.JSONField(default=list)
     style_tags = models.JSONField(default=list)
     source = models.CharField(max_length=50, default='marketplace')
+
+class WishlistItem(models.Model):
+    ITEM_TYPE_CHOICES = (
+        ('product', 'Product'),
+        ('wardrobe_item', 'Wardrobe Item'),
+        ('bundle', 'Bundle'),
+        ('marketplace_bundle', 'Marketplace Bundle'),
+        ('ai_bundle', 'AI Bundle'),
+    )
+
+    wishlist_id = models.CharField(max_length=255, primary_key=True)
+    user = models.ForeignKey('accounts.User', on_delete=models.CASCADE, null=True, blank=True)
+    item_type = models.CharField(max_length=20, choices=ITEM_TYPE_CHOICES)
+    item_id = models.CharField(max_length=255)
+    item_data = models.JSONField(default=dict, help_text="Snapshot of the liked item at like-time")
+    created_at = models.CharField(max_length=100)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'item_type', 'item_id'],
+                name='unique_wishlist_item_per_user',
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.item_type}:{self.item_id} ({self.user})"
