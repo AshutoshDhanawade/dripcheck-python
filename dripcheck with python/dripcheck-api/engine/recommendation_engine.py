@@ -11,7 +11,9 @@ compatibility engine:
         -> PersonalizationEngine.score_item()       (per-item scores)
         -> rank items, keep top-K
         -> generate_bundles()                       (EXISTING engine, untouched)
-        -> combine compatibility + personalization   (final bundle ranking)
+        -> existing blended score (compat + item pers)
+        -> PersonalizationEngine.score_bundle()     (onboarding bonus, 0–30)
+        -> final_score = base_score + personalization_score
 
 The compatibility engine remains the source of truth for *can these items be
 worn together*; this layer only re-ranks which items/bundles surface for a
@@ -25,8 +27,9 @@ from typing import Any, Dict, List, Optional
 
 from api.models import OutfitBundle, UserProfile, WardrobeItem
 
-from engine.compatibility_engine import generate_bundles
+from engine.compatibility_engine import generate_bundles, re_rank_bundles_for_diversity
 from engine.personalization_engine import (
+    BundlePersonalizationResult,
     PersonalizationEngine,
     PersonalizationResult,
     clamp,
@@ -67,12 +70,22 @@ class ItemRanking:
 
 @dataclass
 class ScoredBundle:
-    """A generated bundle enriched with its blended final score."""
+    """A generated bundle enriched with its blended final score.
+
+    ``base_score`` is the existing blended bundle score (compatibility +
+    item-level personalization) and stays unchanged. ``personalization_score``
+    is the bounded onboarding bonus (0–30) computed by
+    :meth:`PersonalizationEngine.score_bundle`. The final score is the sum:
+    ``final_score = base_score + personalization_score``.
+    """
 
     bundle: OutfitBundle
     compatibility_score: float
+    base_score: float
     personalization_score: float
     final_score: float
+    breakdown: Dict[str, float] = field(default_factory=dict)
+    reasons: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -95,7 +108,6 @@ class RecommendationEngine:
         pers_weight: float = DEFAULT_PERS_WEIGHT,
         top_k: Optional[int] = None,
         max_bundles: int = 10,
-        max_item_repeats: int = 2,
     ):
         self.personalizer = PersonalizationEngine(weights=weights)
         self.profile_builder = WardrobeProfileBuilder()
@@ -103,7 +115,6 @@ class RecommendationEngine:
         self.pers_weight = pers_weight
         self.top_k = top_k
         self.max_bundles = max_bundles
-        self.max_item_repeats = max_item_repeats
 
     # ------------------------------------------------------------------
     # Public API
@@ -118,6 +129,8 @@ class RecommendationEngine:
         avoided_colors: Optional[List[str]] = None,
         top_k: Optional[int] = None,
         must_keep_ids: Optional[Any] = None,
+        diversify: bool = False,
+        diversity_top_n: Optional[int] = None,
     ) -> RecommendationResult:
         """Run the full personalized pipeline.
 
@@ -131,6 +144,16 @@ class RecommendationEngine:
                 to the engine's configured ``top_k`` (no truncation when unset).
             must_keep_ids: Item ids that are always included in the pool, even
                 if they rank below the ``top_k`` cutoff (e.g. an anchor item).
+            diversify: Optional POST-ranking diversity re-ranking layer (see
+                ``engine.compatibility_engine.re_rank_bundles_for_diversity``).
+                When False (the default) the FULL ranked bundle list is returned
+                — every valid combination is scored and ranked by final score,
+                and the old "max N repeats" rule is not applied during
+                generation. When True, greedy diversity-aware selection re-orders
+                the ranked list after scoring.
+            diversity_top_n: Number of bundles to return after diversity
+                re-ranking. Defaults to the engine's configured ``max_bundles``
+                (and to the full pool size when ``max_bundles`` caps exceeded).
         """
         profile = self.profile_builder.build(items, user_profile)
 
@@ -156,14 +179,30 @@ class RecommendationEngine:
 
         item_scores = {ranking.item_id: ranking.personalization_score for ranking in ranked}
         default_score = self._default_item_score(ranked)
+        item_lookup = {str(getattr(item, 'item_id', '')): item for item in items}
+        onboarding_preferences = profile.onboarding_preferences
 
         bundles = [
-            self._score_bundle(bundle, item_scores, default_score)
+            self._score_bundle(
+                bundle,
+                item_scores,
+                default_score,
+                item_lookup,
+                onboarding_preferences,
+            )
             for bundle in raw_bundles
         ]
         bundles.sort(key=lambda scored: scored.final_score, reverse=True)
 
-        bundles = self._diversify_bundles(bundles, max_repeats=self.max_item_repeats)
+        # Diversity / similarity re-ranking is a POST-ranking selection layer:
+        # it only re-orders which bundles surface for the UI and never removes
+        # anything from the candidate pool permanently.
+        if diversify:
+            bundles = re_rank_bundles_for_diversity(
+                bundles,
+                top_n=diversity_top_n if diversity_top_n is not None else self.max_bundles,
+                item_lookup=item_lookup,
+            )
 
         return RecommendationResult(
             profile=profile,
@@ -212,60 +251,41 @@ class RecommendationEngine:
         bundle: OutfitBundle,
         item_scores: Dict[str, float],
         default_score: float,
+        item_lookup: Optional[Dict[str, WardrobeItem]] = None,
+        user_preferences: Optional[Dict[str, Any]] = None,
     ) -> ScoredBundle:
         bundle_items = bundle.items or []
         scores = [item_scores.get(str(item_id)) for item_id in bundle_items]
         present = [score for score in scores if score is not None]
-        personalization_score = (
+        item_personalization = (
             sum(present) / len(present) if present else default_score
         )
-        final_score = combine_scores(
+
+        # Existing blended bundle score — unchanged.
+        base_score = combine_scores(
             bundle.compatibility_score,
-            personalization_score,
+            item_personalization,
             self.compat_weight,
             self.pers_weight,
         )
+
+        # Onboarding personalization bonus (0–30), added on top.
+        pers: BundlePersonalizationResult = self.personalizer.score_bundle(
+            bundle=bundle,
+            user_preferences=user_preferences,
+            item_lookup=item_lookup,
+        )
+        personalization_score = round(pers.score, 2)
+
         return ScoredBundle(
             bundle=bundle,
             compatibility_score=bundle.compatibility_score,
-            personalization_score=round(personalization_score, 2),
-            final_score=final_score,
+            base_score=base_score,
+            personalization_score=personalization_score,
+            final_score=round(base_score + personalization_score, 2),
+            breakdown=pers.breakdown,
+            reasons=pers.reasons,
         )
-
-    def _diversify_bundles(
-        self,
-        bundles: List[ScoredBundle],
-        max_repeats: Optional[int] = None,
-    ) -> List[ScoredBundle]:
-        """Limit how many times an item repeats across returned bundles.
-
-        Prevents the same few items from dominating every recommendation on the
-        homepage. Keeps the highest-scored bundles while enforcing (unless the
-        pool is too small) that a single item appears in at most ``max_repeats``
-        bundles.
-        """
-        if max_repeats is None:
-            max_repeats = self.max_item_repeats
-
-        buckets: Dict[str, int] = {}
-        diverse: List[ScoredBundle] = []
-        for scored in bundles:
-            item_ids = scored.bundle.items or []
-            new_counts = [buckets.get(str(i), 0) for i in item_ids]
-            if new_counts and max(new_counts) >= max_repeats:
-                continue
-            for i in item_ids:
-                key = str(i)
-                buckets[key] = buckets.get(key, 0) + 1
-            diverse.append(scored)
-            if len(diverse) >= self.max_bundles:
-                break
-
-        # If diversity was too aggressive (small wardrobes), fall back to
-        # filling the rest with remaining bundles in score order.
-        if len(diverse) < min(len(buckets) // 2 + 1, len(bundles)):
-            return bundles[: self.max_bundles]
-        return diverse
 
     @staticmethod
     def _default_item_score(ranked: List[ItemRanking]) -> float:

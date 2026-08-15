@@ -15,6 +15,8 @@ Flow:
   9. Return avatar_url + bundle details + compatibility score
 """
 
+from __future__ import annotations
+
 import os
 import uuid
 import logging

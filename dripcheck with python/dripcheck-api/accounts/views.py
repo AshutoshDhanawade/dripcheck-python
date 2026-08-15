@@ -444,3 +444,78 @@ class PublicOnboardingSubmitView(APIView):
                 {"error": "An unexpected error occurred during public onboarding submission.", "details": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+class OnboardingPreferencesView(APIView):
+    """Fetch and update an authenticated user's onboarding preferences.
+
+    Works for both incomplete and already-onboarded users, unlike the
+    one-time onboarding submit endpoints.
+    """
+    authentication_classes = [BearerTokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            user = request.user
+
+            # Try to load the existing user's answers (if any).
+            onboarding_response = getattr(user, 'onboarding_response', None)
+            user_answers = onboarding_response.responses if onboarding_response else {}
+
+            questions = OnboardingQuestion.objects.filter(is_active=True).order_by('order')
+            onboarding_data = []
+            for q in questions:
+                options = [{"id": opt.id, "text": opt.text, "is_other": opt.is_other} for opt in q.options.all()]
+                # Answers may be keyed by question text or by question id.
+                answer = user_answers.get(q.text)
+                if answer is None:
+                    answer = user_answers.get(str(q.id), None)
+                onboarding_data.append({
+                    "id": q.id,
+                    "question_text": q.text,
+                    "question_type": q.question_type,
+                    "options": options,
+                    "user_answer": answer,
+                })
+
+            profile_responses = dict(user_answers)
+
+            return Response({
+                "questions": onboarding_data,
+                "profile": profile_responses,
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"error": "An unexpected error occurred while fetching preferences.", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def post(self, request):
+        try:
+            serializer = OnboardingSubmitSerializer(data=request.data)
+            if serializer.is_valid():
+                user = request.user
+                responses = serializer.validated_data['responses']
+
+                # Store entries keyed by the question id, so the answers remain
+                # editable even when question text changes.
+                formatted_responses = build_question_answer_responses(responses)
+
+                UserOnboardingResponse.objects.update_or_create(
+                    user=user,
+                    defaults={'responses': formatted_responses}
+                )
+
+                # Keep the structured UserProfile fields in sync.
+                sync_user_profile_from_onboarding(user, formatted_responses)
+
+                return Response({
+                    "message": "Preferences updated successfully.",
+                    "onboarding_data": formatted_responses,
+                }, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"error": "An unexpected error occurred while updating preferences.", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

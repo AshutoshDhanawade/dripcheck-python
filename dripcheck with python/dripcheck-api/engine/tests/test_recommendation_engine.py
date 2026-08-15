@@ -100,21 +100,24 @@ class RecommendationEngineTest(unittest.TestCase):
         final_scores = [b.final_score for b in result.bundles]
         self.assertEqual(final_scores, sorted(final_scores, reverse=True))
         for scored in result.bundles:
-            expected = combine_scores(
-                scored.compatibility_score,
-                scored.personalization_score,
-            )
-            self.assertEqual(scored.final_score, expected)
+            self.assertIsNotNone(scored.base_score)
+            self.assertEqual(scored.personalization_score, round(scored.personalization_score, 2))
+            self.assertEqual(scored.final_score, round(scored.base_score + scored.personalization_score, 2))
 
-    def test_bundle_personalization_is_item_average(self) -> None:
+    def test_bundle_base_score_is_item_average_blend(self) -> None:
         result = self.engine.recommend(self.items, USER_PROFILE, user_id='u1')
         scores = {r.item_id: r.personalization_score for r in result.ranked_items}
         for scored in result.bundles:
             item_scores = [scores[iid] for iid in scored.bundle.items if iid in scores]
             self.assertTrue(item_scores)
             self.assertAlmostEqual(
-                scored.personalization_score,
-                sum(item_scores) / len(item_scores),
+                scored.base_score,
+                combine_scores(
+                    scored.compatibility_score,
+                    sum(item_scores) / len(item_scores),
+                    self.engine.compat_weight,
+                    self.engine.pers_weight,
+                ),
                 delta=0.01,
             )
 
@@ -164,11 +167,17 @@ class RecommendationEngineTest(unittest.TestCase):
                 item = item_lookup.get(iid)
                 self.assertNotEqual((item.primary_color or '').lower(), 'red')
 
-    def test_custom_blend_weights_affect_final_ranking(self) -> None:
+    def test_custom_blend_weights_affect_base_ranking(self) -> None:
         engine = RecommendationEngine(compat_weight=0.0, pers_weight=1.0)
         result = engine.recommend(self.items, USER_PROFILE, user_id='u1')
         for scored in result.bundles:
-            self.assertEqual(scored.final_score, scored.personalization_score)
+            # With zero compat weight the base is the item personalization average.
+            self.assertLessEqual(scored.base_score, 100)
+            self.assertGreaterEqual(scored.personalization_score, 0)
+            self.assertEqual(
+                scored.final_score,
+                round(scored.base_score + scored.personalization_score, 2),
+            )
 
     def test_personalize_wardrobe_convenience(self) -> None:
         ranked = personalize_wardrobe(self.items, USER_PROFILE)

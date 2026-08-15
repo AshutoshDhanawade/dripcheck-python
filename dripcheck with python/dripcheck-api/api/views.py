@@ -4,8 +4,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
-from .models import WardrobeItem, UserProfile, WearLog, OutfitBundle, MarketplaceBundle
-from .serializers import WardrobeItemSerializer, UserProfileSerializer, WearLogSerializer, OutfitBundleSerializer, MarketplaceBundleSerializer
+from .models import WardrobeItem, UserProfile, WearLog, OutfitBundle, MarketplaceBundle, WishlistItem
+from .serializers import WardrobeItemSerializer, UserProfileSerializer, WearLogSerializer, OutfitBundleSerializer, MarketplaceBundleSerializer, WishlistItemSerializer
 
 class WardrobeListCreateView(APIView):
     def get(self, request):
@@ -139,6 +139,238 @@ class WearLogView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+_ITEM_TYPE_ALIASES = {
+    'product': 'product', 'products': 'product',
+    'wardrobe_item': 'wardrobe_item', 'wardrobe': 'wardrobe_item',
+    'wardrobe-item': 'wardrobe_item', 'item': 'wardrobe_item',
+    'single': 'wardrobe_item', 'single_item': 'wardrobe_item',
+    'bundle': 'bundle', 'bundles': 'bundle',
+    'outfit': 'bundle', 'outfit_bundle': 'bundle',
+    'marketplace_bundle': 'marketplace_bundle', 'marketplace': 'marketplace_bundle',
+    'ai_bundle': 'ai_bundle', 'ai': 'ai_bundle',
+}
+
+_WISHLIST_ID_KEYS = ('item_id', 'wardrobe_item_id', 'product_id', 'bundle_id')
+
+
+def _normalize_item_type(value):
+    """Map common frontend type strings to a canonical wishlist item_type."""
+    if not value:
+        return None
+    key = str(value).strip().lower()
+    return _ITEM_TYPE_ALIASES.get(key)
+
+
+def _extract_wishlist_id(data):
+    """Pull the item id from whichever field the frontend used."""
+    if not data:
+        return None
+    for key in _WISHLIST_ID_KEYS:
+        val = data.get(key)
+        if val:
+            return str(val)
+    return None
+
+
+def _resolve_bundle_items(item_ids):
+    """Resolve a list of wardrobe item ids into full item data (for bundle cards)."""
+    resolved = []
+    for iid in item_ids or []:
+        item = WardrobeItem.objects.filter(item_id=iid).first()
+        if item:
+            resolved.append(WardrobeItemSerializer(item).data)
+    return resolved
+
+
+def _create_outfit_bundle_from_data(user, bundle_id, data):
+    """Persist a generated/homepage bundle so it can be liked & re-fetched."""
+    items = data.get('items')
+    if not items:
+        return None
+    bundle, _ = OutfitBundle.objects.get_or_create(
+        bundle_id=bundle_id,
+        defaults={
+            'user': user,
+            'items': items,
+            'compatibility_score': float(data.get('compatibility_score', 0) or 0),
+            'dominant_color': data.get('dominant_color', '') or '',
+            'dominant_palette': data.get('dominant_palette', '') or '',
+            'occasion_tags': data.get('occasion_tags') or [],
+            'style_tags': data.get('style_tags') or [],
+            'mood_tags': data.get('mood_tags') or [],
+            'is_saved': True,
+            'wear_count': 0,
+            'source': data.get('source', 'user_generated'),
+            'created_at': data.get('created_at') or (datetime.utcnow().isoformat() + 'Z'),
+        },
+    )
+    return bundle
+
+
+def _build_wishlist_snapshot(user, item_type, item_id, bundle_data=None):
+    """
+    Build a JSON snapshot of the liked item at like-time.
+
+    Returns (stored_item_type, snapshot_dict) — the stored type can differ
+    from the requested one (e.g. a 'bundle' that resolves to a marketplace
+    bundle). Returns (None, None) when the item cannot be found.
+    """
+    if item_type == 'wardrobe_item':
+        item = WardrobeItem.objects.filter(item_id=item_id).first()
+        return ('wardrobe_item', WardrobeItemSerializer(item).data) if item else (None, None)
+
+    if item_type == 'product':
+        try:
+            from bundle_generate.models import MerchantProduct
+            merchant = MerchantProduct.objects.filter(product_id=item_id).first()
+            if merchant:
+                return ('product', {
+                    'product_id': merchant.product_id,
+                    'name': merchant.name,
+                    'category': merchant.category,
+                    'subcategory': merchant.subcategory,
+                    'primary_color': merchant.primary_color,
+                    'secondary_color': merchant.secondary_color,
+                    'color_family': merchant.color_family,
+                    'pattern': merchant.pattern,
+                    'fit': merchant.fit,
+                    'occasion_type': merchant.occasion_type,
+                    'season': merchant.season,
+                    'formality_level': merchant.formality_level,
+                    'brand': merchant.brand,
+                    'material': merchant.material,
+                    'style_tags': merchant.style_tags,
+                    'mood_tags': merchant.mood_tags,
+                    'aesthetic_tone': merchant.aesthetic_tone,
+                    'image_url': merchant.image_url,
+                    'price': str(merchant.price),
+                })
+        except Exception:
+            pass
+        return (None, None)
+
+    if item_type == 'bundle':
+        bundle = OutfitBundle.objects.filter(bundle_id=item_id).first()
+        if not bundle and bundle_data and isinstance(bundle_data, dict):
+            bundle = _create_outfit_bundle_from_data(user, item_id, bundle_data)
+        if bundle:
+            data = OutfitBundleSerializer(bundle).data
+            data['items_data'] = _resolve_bundle_items(bundle.items)
+            return ('bundle', data)
+        marketplace = MarketplaceBundle.objects.filter(bundle_id=item_id).first()
+        if marketplace:
+            return ('marketplace_bundle', MarketplaceBundleSerializer(marketplace).data)
+        return (None, None)
+
+    if item_type == 'marketplace_bundle':
+        marketplace = MarketplaceBundle.objects.filter(bundle_id=item_id).first()
+        if marketplace:
+            return ('marketplace_bundle', MarketplaceBundleSerializer(marketplace).data)
+        return (None, None)
+
+    if item_type == 'ai_bundle':
+        if bundle_data is None:
+            return (None, None)
+        return ('ai_bundle', bundle_data)
+
+    return (None, None)
+
+
+def _serialize_wishlist(entry):
+    """Build the nested response shape the frontend Wishlist page expects."""
+    data = entry.item_data or {}
+    payload = {
+        'id': entry.wishlist_id,
+        'item_type': entry.item_type,
+        'created_at': entry.created_at,
+    }
+    if entry.item_type == 'product':
+        payload['product'] = data
+    elif entry.item_type == 'wardrobe_item':
+        payload['wardrobe_item'] = data
+    elif entry.item_type == 'bundle':
+        if not data.get('items_data'):
+            data = dict(data)
+            data['items_data'] = _resolve_bundle_items(data.get('items'))
+        payload['bundle'] = data
+    elif entry.item_type == 'marketplace_bundle':
+        payload['marketplace_bundle'] = data
+    elif entry.item_type == 'ai_bundle':
+        payload['bundle_data'] = data
+        payload['ai_bundle_id'] = entry.item_id
+    return payload
+
+
+class WishlistView(APIView):
+    """
+    GET    /api/wishlist?tag=All|Products|Bundles  → list the user's wishlist
+    POST   /api/wishlist {item_type, <id>, bundle_data?} → like / add
+    DELETE /api/wishlist {item_type, <id>}          → unlike / remove
+    """
+
+    def get(self, request):
+        tag = request.query_params.get('tag', 'All')
+        items = WishlistItem.objects.filter(user=request.user).order_by('-created_at')
+        if tag and tag.lower() == 'products':
+            items = items.filter(item_type__in=['product', 'wardrobe_item'])
+        elif tag and tag.lower() == 'bundles':
+            items = items.filter(item_type__in=['bundle', 'marketplace_bundle', 'ai_bundle'])
+        return Response([_serialize_wishlist(i) for i in items])
+
+    def post(self, request):
+        item_type = _normalize_item_type(request.data.get('item_type'))
+        item_id = _extract_wishlist_id(request.data)
+        if item_type not in _ITEM_TYPE_ALIASES.values() or not item_id:
+            return Response(
+                {"detail": "item_type and an item id (item_id, wardrobe_item_id, product_id or bundle_id) are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        stored_type, snapshot = _build_wishlist_snapshot(
+            request.user, item_type, item_id, bundle_data=request.data.get('bundle_data')
+        )
+        if stored_type is None:
+            return Response(
+                {"detail": f"{item_type} with id {item_id} not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        existing = WishlistItem.objects.filter(
+            user=request.user, item_type=stored_type, item_id=item_id
+        ).first()
+        if existing:
+            return Response(_serialize_wishlist(existing), status=status.HTTP_200_OK)
+
+        entry = WishlistItem.objects.create(
+            wishlist_id=str(uuid.uuid4()),
+            user=request.user,
+            item_type=stored_type,
+            item_id=item_id,
+            item_data=snapshot,
+            created_at=datetime.utcnow().isoformat() + 'Z',
+        )
+        return Response(_serialize_wishlist(entry), status=status.HTTP_201_CREATED)
+
+    def delete(self, request):
+        item_type = _normalize_item_type(request.data.get('item_type'))
+        item_id = _extract_wishlist_id(request.data)
+        if item_type not in _ITEM_TYPE_ALIASES.values() or not item_id:
+            return Response(
+                {"detail": "item_type and an item id (item_id, wardrobe_item_id, product_id or bundle_id) are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        stored_type, _ = _build_wishlist_snapshot(
+            request.user, item_type, item_id, bundle_data=request.data.get('bundle_data')
+        )
+        if stored_type is None:
+            stored_type = item_type
+        deleted, _ = WishlistItem.objects.filter(
+            user=request.user, item_type=stored_type, item_id=item_id
+        ).delete()
+        return Response({"removed": bool(deleted)}, status=status.HTTP_200_OK)
 
 
 import logging

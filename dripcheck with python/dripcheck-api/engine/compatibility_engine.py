@@ -441,15 +441,232 @@ def generate_bundles(
     return bundles
 
 
+# ==========================================
+# PART 6: Diversity / Similarity Re-ranking
+# ==========================================
+
+# Configurable penalties applied at selection time. The base bundle score is
+# 0–100, so top/bottom identity dominates: two bundles sharing the same top
+# AND bottom are visually the same outfit with different footwear and must
+# not both crowd the top of the UI.
+DIVERSITY_PENALTIES = {
+    'same_top': 20,
+    'same_bottom': 20,
+    'same_layer': 5,
+    'same_footwear': 10,
+    'same_color': 5,
+    'same_style': 5,
+    'same_fit': 5,
+    'same_occasion': 3,
+}
+
+
+def bundle_diversity_profile(bundle, item_lookup=None) -> dict:
+    """Precompute a normalized similarity profile for one bundle.
+
+    Profiles are built once per bundle and reused for every comparison against
+    the selected set, so no database access is needed during re-ranking.
+    ``item_lookup`` maps item ids to ``WardrobeItem`` objects so the bundle's
+    top/bottom/footwear/layer slots and visual attributes can be resolved.
+    Bundle-level attributes (style_tags, occasion_tags, dominant palette/color)
+    are used as fallbacks when item objects are unavailable.
+    """
+    slots = {'Top': set(), 'Bottom': set(), 'Footwear': set(), 'Layer': set()}
+    colors: set[str] = set()
+    styles: set[str] = set()
+    fits: set[str] = set()
+    occasions: set[str] = set()
+    item_ids: set[str] = set()
+
+    for item_id in (getattr(bundle, 'items', None) or []):
+        str_id = str(item_id)
+        item_ids.add(str_id)
+        item = item_lookup.get(str_id) if item_lookup else None
+        if item is None:
+            continue
+        category = getattr(item, 'category', None)
+        if category in slots:
+            slots[category].add(str_id)
+
+        primary = getattr(item, 'primary_color', '') or ''
+        if primary:
+            colors.add(str(primary).strip().lower())
+        for tag in (getattr(item, 'style_tags', None) or []):
+            if tag:
+                styles.add(str(tag).strip().lower())
+        fit = getattr(item, 'fit', None)
+        if fit:
+            fits.add(str(fit).strip().lower())
+        for occ in (getattr(item, 'occasion_type', None) or []):
+            if occ:
+                occasions.add(str(occ).strip().lower())
+
+    # Bundle-level attribute fallbacks.
+    for tag in (getattr(bundle, 'style_tags', None) or []):
+        if tag:
+            styles.add(str(tag).strip().lower())
+    for occ in (getattr(bundle, 'occasion_tags', None) or []):
+        if occ:
+            occasions.add(str(occ).strip().lower())
+    palette = getattr(bundle, 'dominant_palette', None)
+    if palette:
+        colors.add(str(palette).strip().lower())
+    dominant = getattr(bundle, 'dominant_color', None)
+    if dominant:
+        colors.add(str(dominant).strip().lower())
+
+    return {
+        'top': slots['Top'],
+        'bottom': slots['Bottom'],
+        'layer': slots['Layer'],
+        'footwear': slots['Footwear'],
+        'colors': colors,
+        'styles': styles,
+        'fits': fits,
+        'occasions': occasions,
+        'item_ids': item_ids,
+    }
+
+
+def similarity_penalty_between(
+    profile_a: dict,
+    profile_b: dict,
+    penalties: Optional[dict] = None,
+) -> tuple:
+    """Penalty (and component breakdown) for comparing two bundle profiles.
+
+    Returns ``(penalty, breakdown)`` where ``breakdown`` maps each similarity
+    component (same_top, same_bottom, ...) to a boolean. Only the highest
+    contribution per component matters; attributes absent from a profile simply
+    contribute nothing instead of guessing.
+    """
+    effective = dict(DIVERSITY_PENALTIES)
+    if penalties:
+        effective.update(penalties)
+
+    breakdown = {
+        'same_top': bool(profile_a['top'] & profile_b['top']),
+        'same_bottom': bool(profile_a['bottom'] & profile_b['bottom']),
+        'same_layer': bool(profile_a['layer'] & profile_b['layer']),
+        'same_footwear': bool(profile_a['footwear'] & profile_b['footwear']),
+        'same_color': bool(profile_a['colors'] & profile_b['colors']),
+        'same_style': bool(profile_a['styles'] & profile_b['styles']),
+        'same_fit': bool(profile_a['fits'] & profile_b['fits']),
+        'same_occasion': bool(profile_a['occasions'] & profile_b['occasions']),
+    }
+
+    # Identity fallback: when slots could not be resolved (no item_lookup),
+    # an identical item-id composition is still treated as same top+bottom+shoe.
+    slot_keys = ('same_top', 'same_bottom', 'same_footwear', 'same_layer')
+    if not any(breakdown[k] for k in slot_keys):
+        if profile_a['item_ids'] and profile_a['item_ids'] == profile_b['item_ids']:
+            breakdown['same_top'] = True
+            breakdown['same_bottom'] = True
+            breakdown['same_footwear'] = True
+
+    penalty = sum(effective[key] for key, matched in breakdown.items() if matched)
+    return penalty, breakdown
+
+
+def _bundle_id(bundle_obj) -> str:
+    inner = getattr(bundle_obj, 'bundle', bundle_obj)
+    return getattr(inner, 'bundle_id', None) or getattr(bundle_obj, 'bundle_id', '') or ''
+
+
+def re_rank_bundles_for_diversity(
+    bundles: List,
+    top_n: Optional[int] = None,
+    item_lookup: Optional[dict] = None,
+    penalties: Optional[dict] = None,
+    score_attr: str = 'final_score',
+) -> List:
+    """Greedy diversity-aware re-ranking of already-scored bundles.
+
+    Operates AFTER generation and scoring. It never removes a bundle from the
+    pool: every candidate is compared against the bundles selected so far and
+    picked greedily by its diversity-adjusted score, so a similar bundle can
+    still surface later if the UI requests enough results.
+
+    Each returned bundle keeps its original ``final_score`` and gains
+    ``diversity_penalty``, ``adjusted_score``, ``similar_to`` and
+    ``similarity_breakdown`` attributes for debugging/tuning. ``top_n`` caps
+    the returned count; when ``None`` the whole pool is returned re-ordered.
+    """
+    if not bundles:
+        return []
+    if len(bundles) == 1:
+        return list(bundles)
+
+    effective_top_n = len(bundles) if top_n is None else min(int(top_n), len(bundles))
+    candidates = [
+        {
+            'obj': bundle,
+            'final_score': float(getattr(bundle, score_attr, 0.0)),
+            'profile': bundle_diversity_profile(getattr(bundle, 'bundle', bundle), item_lookup),
+        }
+        for bundle in bundles
+    ]
+
+    selected: List[dict] = []
+    remaining = list(candidates)
+
+    for _ in range(effective_top_n):
+        best = None
+        best_adjusted = None
+        for cand in remaining:
+            if not selected:
+                penalty = 0.0
+                breakdown: dict = {}
+                similar_to = None
+            else:
+                worst_penalty = -1.0
+                worst_breakdown: dict = {}
+                worst_similar = None
+                for sel in selected:
+                    p, br = similarity_penalty_between(
+                        cand['profile'], sel['profile'], penalties,
+                    )
+                    if p > worst_penalty:
+                        worst_penalty = p
+                        worst_breakdown = br
+                        worst_similar = _bundle_id(sel['obj'])
+                penalty = worst_penalty
+                breakdown = worst_breakdown
+                similar_to = worst_similar
+
+            adjusted = cand['final_score'] - penalty
+            if best is None or (
+                adjusted > best_adjusted
+                or (adjusted == best_adjusted and cand['final_score'] > best['final_score'])
+            ):
+                best = cand
+                best_adjusted = adjusted
+                best_penalty = penalty
+                best_breakdown = breakdown
+                best_similar = similar_to
+
+        obj = best['obj']
+        obj.diversity_penalty = round(best_penalty, 2)
+        obj.adjusted_score = round(best_adjusted, 2)
+        obj.similar_to = best_similar
+        obj.similarity_breakdown = best_breakdown
+
+        selected.append(best)
+        remaining.remove(best)
+
+    return [cand['obj'] for cand in selected]
+
+
 def recommend_bundle_for_anchor(
     anchor_item: WardrobeItem,
     wardrobe_items: List[WardrobeItem],
-    max_per_category: int = 6
+    max_per_category: Optional[int] = None
 ) -> dict:
     """Find the strongest outfit bundle anchored on a user-uploaded item.
 
     Reuses the existing compatibility scoring engine to keep recommendation logic
-    consistent with the rest of the application.
+    consistent with the rest of the application. Every eligible complement item
+    is considered (no per-category cap unless ``max_per_category`` is set).
     """
     complement_map = {
         'Top': ['Bottom', 'Footwear'],
@@ -462,7 +679,10 @@ def recommend_bundle_for_anchor(
     categories = required_categories + [optional_category]
     grouped: dict[str, list[WardrobeItem]] = {}
     for cat in categories:
-        grouped[cat] = [item for item in wardrobe_items if item.category == cat][:max_per_category]
+        items_for_cat = [item for item in wardrobe_items if item.category == cat]
+        if max_per_category:
+            items_for_cat = items_for_cat[:max_per_category]
+        grouped[cat] = items_for_cat
 
     def iter_combinations(categories_left: list[str], current: list[WardrobeItem]):
         if not categories_left:
