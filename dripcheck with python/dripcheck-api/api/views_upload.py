@@ -9,7 +9,8 @@ from rest_framework import status
 from django.conf import settings
 from .models import WardrobeItem
 from .serializers import WardrobeItemSerializer
-from services import gemini_service
+from services import gemini_service, product_metadata
+from services.occasion_taxonomy import normalize_occasion_list
 from services.product_link_scraper import (
     NotClothingProductError,
     ProductScrapeError,
@@ -49,7 +50,7 @@ def build_wardrobe_item_payload(user, name, color, type_str, category_raw, metad
         "color_family": metadata.get('color_family', 'Neutral'),
         "pattern": metadata.get('pattern', 'Solid'),
         "fit": metadata.get('fit', 'Regular'),
-        "occasion_type": metadata.get('occasion_type', ['Casual']),
+        "occasion_type": normalize_occasion_list(metadata.get('occasion_type') or []) or ['Casual'],
         "season": metadata.get('season', 'All-season'),
         "formality_level": metadata.get('formality_level', 5),
         "brand": metadata.get('brand'),
@@ -146,14 +147,24 @@ class UploadProductView(APIView):
             fallback_used = True
             shutil.copy(orig_path, processed_path)
             
-        # 7. Call Gemini 2.0 Flash to extract metadata
-        metadata = {}
+        # 7. Analyze the actual product image together with the user-entered
+        #    fields (treated as evidence) through the SAME reconciliation
+        #    pipeline used by the product-link flow. Gemini failure is
+        #    non-fatal: the item still resolves from the user evidence alone.
+        evidence = {
+            'name': name,
+            'description': type_str,
+            'structured_color': color,
+            'structured_category': category,
+            'source_url': product_url or '',
+        }
+        vision_result = None
         try:
-            metadata = gemini_service.extract_product_metadata(image_bytes, name, color, type_str, category)
+            vision_result = gemini_service.extract_product_metadata_from_evidence(image_bytes, evidence)
             logger.info("Successfully extracted product metadata via Gemini.")
         except Exception as e:
-            logger.warning(f"Gemini metadata extraction failed. Using local heuristic fallback. Error: {e}")
-            metadata = gemini_service.infer_metadata_locally(name, color, type_str, category)
+            logger.warning(f"Gemini metadata extraction failed; using evidence-based fallback. Error: {e}")
+        metadata, _provenance = product_metadata.resolve_metadata(evidence, vision_result)
             
         # 8. Build URLs
         original_url = f"{settings.MEDIA_URL}temp/{orig_filename}"
@@ -188,7 +199,13 @@ class AddProductLinkView(APIView):
       - user_id: String (optional, default: user_demo)
 
     Scrapes a clothing/apparel product page, validates that it is apparel, saves
-    the product image, infers wardrobe metadata, and creates the wardrobe item.
+    the product image, analyzes the actual image with Gemini vision together
+    with the scraped product evidence, reconciles the sources into wardrobe
+    metadata, and creates the wardrobe item.
+
+    Gemini failure is non-fatal: the item is still imported using reliable
+    scraped evidence and conservative fallbacks.
+
     Requires a valid JWT via `Authorization: Bearer <token>`; the user is
     resolved from the token.
     """
@@ -208,27 +225,43 @@ class AddProductLinkView(APIView):
             logger.exception(f"Unexpected product link scraping failure: {e}")
             return Response({"success": False, "error": "Failed to process this product link."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        metadata = gemini_service.infer_metadata_locally(
-            scraped['name'],
-            scraped['color'],
-            scraped['type'],
-            scraped['category'],
-        )
+        evidence = scraped.get('evidence') or {}
+        image_bytes = scraped.get('image_bytes')
+
+        # 1. Vision: analyze the ACTUAL downloaded product image with the
+        #    scraped evidence. One Gemini call per product link.
+        vision_result = None
+        if image_bytes:
+            try:
+                vision_result = gemini_service.extract_product_metadata_from_evidence(image_bytes, evidence)
+                logger.info("Successfully extracted product metadata from product image via Gemini.")
+            except Exception as e:
+                logger.warning(
+                    f"Gemini vision analysis failed for product link {product_url}; "
+                    f"using evidence-based fallback. Error: {e}"
+                )
+
+        # 2. Reconcile page evidence + visual evidence (conflict handling).
+        metadata, provenance = product_metadata.resolve_metadata(evidence, vision_result)
         if scraped.get('brand'):
             metadata['brand'] = scraped['brand']
         metadata['aesthetic_tone'] = metadata.get('aesthetic_tone') or f"Linked product from {scraped['source_url']}"
+        fallback_used = vision_result is None
+
+        if provenance.get('conflicts'):
+            logger.info(f"Product link metadata conflicts for {product_url}: {provenance['conflicts']}")
 
         user = request.user
         wardrobe_data = build_wardrobe_item_payload(
             user=user,
             name=scraped['name'],
-            color=scraped['color'],
-            type_str=scraped['type'],
-            category_raw=scraped['category'],
+            color=metadata.get('primary_color') or scraped['color'],
+            type_str=metadata.get('subcategory') or scraped['type'],
+            category_raw=metadata.get('category') or scraped['category'],
             metadata=metadata,
             image_url=scraped['image_url'],
             source_url=scraped['source_url'],
-            fallback_used=True,
+            fallback_used=fallback_used,
         )
 
         serializer = WardrobeItemSerializer(data=wardrobe_data)
@@ -330,7 +363,7 @@ class ApproveProductView(APIView):
             "color_family": metadata.get('color_family', 'Neutral'),
             "pattern": metadata.get('pattern', 'Solid'),
             "fit": metadata.get('fit', 'Regular'),
-            "occasion_type": metadata.get('occasion_type', ['Casual']),
+            "occasion_type": normalize_occasion_list(metadata.get('occasion_type') or []) or ['Casual'],
             "season": metadata.get('season', 'All-season'),
             "formality_level": metadata.get('formality_level', 5),
             "brand": metadata.get('brand'),

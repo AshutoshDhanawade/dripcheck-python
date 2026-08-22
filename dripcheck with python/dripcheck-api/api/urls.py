@@ -7,6 +7,7 @@ from .views import (
     WearLogView,
     FrontendLogView,
     WishlistView,
+    OccasionTaxonomyView,
 )
 from .views_upload import AddProductLinkView, UploadProductView, ApproveProductView
 from .views_avatar import GenerateAvatarView
@@ -14,6 +15,9 @@ from .views_avatar import GenerateAvatarView
 from bundlegeneration import BundleListView, SaveBundleView, MarketplaceView
 
 urlpatterns = [
+    # ── Occasion taxonomy (backend source of truth) ───────────────────────────
+    path('occasions/taxonomy', OccasionTaxonomyView.as_view(), name='occasion-taxonomy'),
+
     # ── Wardrobe ──────────────────────────────────────────────────────────────
     path('wardrobe/upload-product', UploadProductView.as_view(), name='wardrobe-upload-product'),
     path('wardrobe/add-product-link', AddProductLinkView.as_view(), name='wardrobe-add-product-link'),

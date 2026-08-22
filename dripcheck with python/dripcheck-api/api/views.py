@@ -6,6 +6,18 @@ from rest_framework import status
 from django.shortcuts import get_object_or_404
 from .models import WardrobeItem, UserProfile, WearLog, OutfitBundle, MarketplaceBundle, WishlistItem
 from .serializers import WardrobeItemSerializer, UserProfileSerializer, WearLogSerializer, OutfitBundleSerializer, MarketplaceBundleSerializer, WishlistItemSerializer
+from services.occasion_taxonomy import canonical_child, normalize_occasion_list, taxonomy_payload
+
+class OccasionTaxonomyView(APIView):
+    """
+    GET /api/occasions/taxonomy
+
+    Backend source of truth for the hierarchical occasion taxonomy. The
+    frontend must not hardcode occasion lists — it fetches them here.
+    """
+
+    def get(self, request):
+        return Response(taxonomy_payload())
 
 class WardrobeListCreateView(APIView):
     def get(self, request):
@@ -102,9 +114,14 @@ class WearLogView(APIView):
         bundle_id = data.get("bundle_id")
         date = data.get("worn_date")
         occasion = data.get("occasion_tag")
-        
+
         if not date or not occasion:
             return Response({"detail": "Missing worn_date or occasion_tag"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Normalize free-form wear-log occasions through the taxonomy
+        # (aliases + legacy values resolve to canonical tags; unknown values
+        # are preserved as entered).
+        occasion = canonical_child(occasion) or occasion
             
         item_ids = []
         if bundle_id:
@@ -197,7 +214,7 @@ def _create_outfit_bundle_from_data(user, bundle_id, data):
             'compatibility_score': float(data.get('compatibility_score', 0) or 0),
             'dominant_color': data.get('dominant_color', '') or '',
             'dominant_palette': data.get('dominant_palette', '') or '',
-            'occasion_tags': data.get('occasion_tags') or [],
+            'occasion_tags': normalize_occasion_list(data.get('occasion_tags') or []),
             'style_tags': data.get('style_tags') or [],
             'mood_tags': data.get('mood_tags') or [],
             'is_saved': True,

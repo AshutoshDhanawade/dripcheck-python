@@ -155,6 +155,9 @@ TWILIO_PHONE_NUMBER = config('TWILIO_PHONE_NUMBER', default='your_twilio_phone_n
 
 # Gemini API Settings
 GEMINI_API_KEY = config('GEMINI_API_KEY')
+# Vision model for clothing metadata extraction. gemini-2.0-flash was retired
+# by Google; the endpoint recommends gemini-3.6-flash. Override via env if needed.
+GEMINI_VISION_MODEL = config('GEMINI_VISION_MODEL', default='gemini-3.6-flash')
 
 # Hugging Face avatar generation settings
 HF_API_TOKEN = config('HF_API_TOKEN', default='')

@@ -37,6 +37,7 @@ from engine.compatibility_engine import (
     recommend_bundle_for_anchor,
 )
 from services import gemini_service, huggingface_service
+from services.occasion_taxonomy import normalize_occasion_list
 
 logger = logging.getLogger(__name__)
 
@@ -284,7 +285,7 @@ class GenerateAvatarView(APIView):
             color_family     = metadata.get('color_family', 'Neutral'),
             pattern          = metadata.get('pattern', 'Solid'),
             fit              = metadata.get('fit', 'Regular'),
-            occasion_type    = metadata.get('occasion_type', ['Casual']),
+            occasion_type    = normalize_occasion_list(metadata.get('occasion_type') or []) or ['Casual'],
             season           = metadata.get('season', 'All-season'),
             formality_level  = metadata.get('formality_level', 5),
             brand            = metadata.get('brand'),
@@ -313,7 +314,7 @@ class GenerateAvatarView(APIView):
         best_score        = 0.0
         best_style_tags   = []
         best_dominant     = {'color': color, 'palette': metadata.get('color_family', 'Neutral')}
-        best_occasion     = metadata.get('occasion_type', ['Casual'])
+        best_occasion     = normalize_occasion_list(metadata.get('occasion_type') or []) or ['Casual']
         recommended_bundle = {
             'topwear': None,
             'bottomwear': None,
@@ -345,7 +346,7 @@ class GenerateAvatarView(APIView):
                 occ_set = set()
                 for itm in best_bundle_items:
                     occ_set.update(getattr(itm, 'occasion_type', []) or [])
-                best_occasion = list(occ_set)
+                best_occasion = normalize_occasion_list(list(occ_set))
 
         # Serialise bundle for response (exclude the uploaded fake item — include real DB items only)
         bundle_dicts = {}
@@ -430,7 +431,7 @@ class GenerateAvatarView(APIView):
             'season':         metadata.get('season', 'All-season'),
             'formality_level': metadata.get('formality_level', 5),
             'style_tags':     metadata.get('style_tags', []),
-            'occasion_type':  metadata.get('occasion_type', ['Casual']),
+            'occasion_type':  normalize_occasion_list(metadata.get('occasion_type') or []) or ['Casual'],
         }
 
         matching_score = round(best_score / 100, 2)

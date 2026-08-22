@@ -16,7 +16,10 @@ from engine.personalization_engine import (  # noqa: E402
     PersonalizationEngine,
     calculate_bundle_personalization,
 )
-from engine.recommendation_engine import RecommendationEngine  # noqa: E402
+from engine.recommendation_engine import (  # noqa: E402
+    RecommendationEngine,
+    bundle_ranking_score,
+)
 from engine.tests.helpers import make_item  # noqa: E402
 
 
@@ -215,7 +218,7 @@ class MissingPreferencesTest(unittest.TestCase):
 
 
 class FinalRankingTest(unittest.TestCase):
-    def test_sort_orders_by_final_score_descending(self) -> None:
+    def test_sort_orders_by_ranking_score_descending(self) -> None:
         prefs = {
             'style_vibes': ['Streetwear', 'Casual'],
             'preferred_subcategories': ['T-Shirts', 'Cargo Pants', 'Sneakers'],
@@ -248,12 +251,16 @@ class FinalRankingTest(unittest.TestCase):
 
         engine = RecommendationEngine()
         result = engine.recommend(combined, prefs, user_id='u1')
-        finals = [b.final_score for b in result.bundles]
-        self.assertEqual(finals, sorted(finals, reverse=True))
+        rankings = [b.ranking_score for b in result.bundles]
+        self.assertEqual(rankings, sorted(rankings, reverse=True))
         for scored in result.bundles:
             self.assertEqual(
-                scored.final_score,
-                round(scored.base_score + scored.personalization_score, 2),
+                scored.ranking_score,
+                bundle_ranking_score(
+                    scored.compatibility_score,
+                    scored.personalization_score,
+                    scored.diversity_penalty,
+                ),
             )
 
         strong_ids = {'t1', 'b1', 's1'}
@@ -286,7 +293,7 @@ class FinalRankingTest(unittest.TestCase):
         result = engine.recommend(items, prefs, user_id='u1')
         for scored in result.bundles:
             self.assertLessEqual(scored.personalization_score, MAX_BUNDLE_PERSONALIZATION)
-            self.assertEqual(scored.base_score, round(scored.base_score, 2))
+            self.assertEqual(scored.personalization_score, round(scored.personalization_score, 2))
 
 
 if __name__ == '__main__':

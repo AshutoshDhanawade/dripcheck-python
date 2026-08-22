@@ -11,13 +11,19 @@ compatibility engine:
         -> PersonalizationEngine.score_item()       (per-item scores)
         -> rank items, keep top-K
         -> generate_bundles()                       (EXISTING engine, untouched)
-        -> existing blended score (compat + item pers)
         -> PersonalizationEngine.score_bundle()     (onboarding bonus, 0–30)
-        -> final_score = base_score + personalization_score
+        -> compute_diversity_penalties()            (BEFORE ranking)
+        -> ranking_score = compatibility + personalization − diversity penalty
 
 The compatibility engine remains the source of truth for *can these items be
-worn together*; this layer only re-ranks which items/bundles surface for a
-specific user.
+worn together*; this layer only re-ranks which bundles surface for a
+specific user. There is exactly ONE ranking formula:
+
+    ranking_score = compatibility_score + personalization_score
+                    − diversity_penalty
+
+No other score layers exist (no weighted blend, no occasion dimension, no
+item-level personalization in the bundle ranking).
 """
 
 from __future__ import annotations
@@ -27,34 +33,36 @@ from typing import Any, Dict, List, Optional
 
 from api.models import OutfitBundle, UserProfile, WardrobeItem
 
-from engine.compatibility_engine import generate_bundles, re_rank_bundles_for_diversity
+from engine.compatibility_engine import (
+    bundle_diversity_profile,
+    diversity_breakdown_penalties,
+    generate_bundles,
+    similarity_penalty_between,
+)
 from engine.personalization_engine import (
     BundlePersonalizationResult,
     PersonalizationEngine,
     PersonalizationResult,
-    clamp,
-    normalize_weights,
 )
 from engine.wardrobe_profile import WardrobeProfile, WardrobeProfileBuilder
 
-# Default blend used when ranking final bundles (configurable).
-DEFAULT_COMPAT_WEIGHT = 0.6
-DEFAULT_PERS_WEIGHT = 0.4
 
-
-def combine_scores(
+def bundle_ranking_score(
     compatibility_score: float,
     personalization_score: float,
-    compat_weight: float = DEFAULT_COMPAT_WEIGHT,
-    pers_weight: float = DEFAULT_PERS_WEIGHT,
+    diversity_penalty: float = 0.0,
 ) -> float:
-    """Weighted blend of compatibility and personalization into 0–100.
+    """Canonical bundle ranking score: compatibility + personalization − diversity.
 
-    Weights are normalized so they do not need to sum to exactly 1.
+    The diversity penalty is always SUBTRACTED regardless of its sign, so a
+    penalty stored as ``20`` or ``-20`` never double-counts.
     """
-    total = max(compat_weight + pers_weight, 1e-9)
-    blended = (compat_weight * compatibility_score + pers_weight * personalization_score) / total
-    return round(clamp(blended), 2)
+    return round(
+        float(compatibility_score)
+        + float(personalization_score)
+        - abs(float(diversity_penalty or 0.0)),
+        2,
+    )
 
 
 @dataclass
@@ -70,20 +78,23 @@ class ItemRanking:
 
 @dataclass
 class ScoredBundle:
-    """A generated bundle enriched with its blended final score.
+    """A generated bundle enriched with its canonical ranking score.
 
-    ``base_score`` is the existing blended bundle score (compatibility +
-    item-level personalization) and stays unchanged. ``personalization_score``
-    is the bounded onboarding bonus (0–30) computed by
-    :meth:`PersonalizationEngine.score_bundle`. The final score is the sum:
-    ``final_score = base_score + personalization_score``.
+    ``ranking_score = compatibility_score + personalization_score −
+    diversity_penalty`` — the single formula that drives ordering everywhere
+    (see :func:`bundle_ranking_score`). ``personalization_score`` is the
+    bounded onboarding bonus (0–30) computed by
+    :meth:`PersonalizationEngine.score_bundle`. ``diversity_penalty`` /
+    ``diversity_breakdown`` are computed by :func:`compute_diversity_penalties`
+    BEFORE the bundles are ranked, so diversity genuinely affects ordering.
     """
 
     bundle: OutfitBundle
     compatibility_score: float
-    base_score: float
     personalization_score: float
-    final_score: float
+    ranking_score: float = 0.0
+    diversity_penalty: float = 0.0
+    diversity_breakdown: Dict[str, float] = field(default_factory=dict)
     breakdown: Dict[str, float] = field(default_factory=dict)
     reasons: List[str] = field(default_factory=list)
 
@@ -104,17 +115,11 @@ class RecommendationEngine:
     def __init__(
         self,
         weights: Optional[Dict[str, float]] = None,
-        compat_weight: float = DEFAULT_COMPAT_WEIGHT,
-        pers_weight: float = DEFAULT_PERS_WEIGHT,
         top_k: Optional[int] = None,
-        max_bundles: int = 10,
     ):
         self.personalizer = PersonalizationEngine(weights=weights)
         self.profile_builder = WardrobeProfileBuilder()
-        self.compat_weight = compat_weight
-        self.pers_weight = pers_weight
         self.top_k = top_k
-        self.max_bundles = max_bundles
 
     # ------------------------------------------------------------------
     # Public API
@@ -129,8 +134,6 @@ class RecommendationEngine:
         avoided_colors: Optional[List[str]] = None,
         top_k: Optional[int] = None,
         must_keep_ids: Optional[Any] = None,
-        diversify: bool = False,
-        diversity_top_n: Optional[int] = None,
     ) -> RecommendationResult:
         """Run the full personalized pipeline.
 
@@ -144,16 +147,11 @@ class RecommendationEngine:
                 to the engine's configured ``top_k`` (no truncation when unset).
             must_keep_ids: Item ids that are always included in the pool, even
                 if they rank below the ``top_k`` cutoff (e.g. an anchor item).
-            diversify: Optional POST-ranking diversity re-ranking layer (see
-                ``engine.compatibility_engine.re_rank_bundles_for_diversity``).
-                When False (the default) the FULL ranked bundle list is returned
-                — every valid combination is scored and ranked by final score,
-                and the old "max N repeats" rule is not applied during
-                generation. When True, greedy diversity-aware selection re-orders
-                the ranked list after scoring.
-            diversity_top_n: Number of bundles to return after diversity
-                re-ranking. Defaults to the engine's configured ``max_bundles``
-                (and to the full pool size when ``max_bundles`` caps exceeded).
+
+        The FULL ranked bundle list is returned: every valid combination is
+        scored and ranked by ``ranking_score`` (compatibility + onboarding
+        personalization − diversity penalty). Diversity is computed BEFORE the
+        sort so it genuinely affects the order.
         """
         profile = self.profile_builder.build(items, user_profile)
 
@@ -177,32 +175,33 @@ class RecommendationEngine:
             avoided_colors=effective_avoided,
         )
 
-        item_scores = {ranking.item_id: ranking.personalization_score for ranking in ranked}
-        default_score = self._default_item_score(ranked)
         item_lookup = {str(getattr(item, 'item_id', '')): item for item in items}
         onboarding_preferences = profile.onboarding_preferences
 
         bundles = [
             self._score_bundle(
                 bundle,
-                item_scores,
-                default_score,
                 item_lookup,
                 onboarding_preferences,
             )
             for bundle in raw_bundles
         ]
-        bundles.sort(key=lambda scored: scored.final_score, reverse=True)
 
-        # Diversity / similarity re-ranking is a POST-ranking selection layer:
-        # it only re-orders which bundles surface for the UI and never removes
-        # anything from the candidate pool permanently.
-        if diversify:
-            bundles = re_rank_bundles_for_diversity(
-                bundles,
-                top_n=diversity_top_n if diversity_top_n is not None else self.max_bundles,
-                item_lookup=item_lookup,
+        # Diversity is part of the canonical ranking score, so it must be
+        # computed BEFORE ordering:
+        #   ranking_score = compatibility + personalization − diversity penalty
+        compute_diversity_penalties(bundles, item_lookup=item_lookup)
+        for scored in bundles:
+            bundle = scored.bundle
+            scored.ranking_score = bundle_ranking_score(
+                scored.compatibility_score,
+                scored.personalization_score,
+                scored.diversity_penalty,
             )
+            bundle.ranking_score = scored.ranking_score
+            bundle.personalization_score = scored.personalization_score
+
+        bundles.sort(key=lambda scored: scored.ranking_score, reverse=True)
 
         return RecommendationResult(
             profile=profile,
@@ -249,50 +248,75 @@ class RecommendationEngine:
     def _score_bundle(
         self,
         bundle: OutfitBundle,
-        item_scores: Dict[str, float],
-        default_score: float,
         item_lookup: Optional[Dict[str, WardrobeItem]] = None,
         user_preferences: Optional[Dict[str, Any]] = None,
     ) -> ScoredBundle:
-        bundle_items = bundle.items or []
-        scores = [item_scores.get(str(item_id)) for item_id in bundle_items]
-        present = [score for score in scores if score is not None]
-        item_personalization = (
-            sum(present) / len(present) if present else default_score
-        )
-
-        # Existing blended bundle score — unchanged.
-        base_score = combine_scores(
-            bundle.compatibility_score,
-            item_personalization,
-            self.compat_weight,
-            self.pers_weight,
-        )
-
-        # Onboarding personalization bonus (0–30), added on top.
+        # Onboarding personalization bonus (0–30): the only personalization
+        # signal that feeds the canonical ranking score.
         pers: BundlePersonalizationResult = self.personalizer.score_bundle(
             bundle=bundle,
             user_preferences=user_preferences,
             item_lookup=item_lookup,
         )
-        personalization_score = round(pers.score, 2)
 
         return ScoredBundle(
             bundle=bundle,
             compatibility_score=bundle.compatibility_score,
-            base_score=base_score,
-            personalization_score=personalization_score,
-            final_score=round(base_score + personalization_score, 2),
+            personalization_score=round(pers.score, 2),
             breakdown=pers.breakdown,
             reasons=pers.reasons,
         )
 
-    @staticmethod
-    def _default_item_score(ranked: List[ItemRanking]) -> float:
-        """Fallback bundle personalization = mean item score across the wardrobe."""
-        if not ranked:
-            return 50.0
-        return sum(r.personalization_score for r in ranked) / len(ranked)
+
+def compute_diversity_penalties(
+    bundles: List,
+    item_lookup: Optional[Dict[str, WardrobeItem]] = None,
+) -> List:
+    """Compute the diversity penalty for every bundle in a result set.
+
+    For each bundle this computes the worst ``similarity_penalty_between``
+    score against the OTHER bundles in the same set and stores:
+
+      * ``diversity_penalty`` — points to subtract (always positive),
+      * ``diversity_breakdown`` — numeric per-component penalty map
+        (sums back to ``diversity_penalty``).
+
+    The penalty is attached to both the wrapper (``ScoredBundle``) and the
+    underlying bundle object so serializers can expose it. This runs BEFORE
+    ranking so the penalty is part of the canonical
+    ``ranking_score = compatibility + personalization − diversity penalty``.
+    """
+    if not bundles:
+        return bundles
+
+    def _bundle_obj(obj):
+        return getattr(obj, 'bundle', obj)
+
+    profiles = [
+        bundle_diversity_profile(_bundle_obj(scored), item_lookup)
+        for scored in bundles
+    ]
+
+    for i, scored in enumerate(bundles):
+        worst_penalty = 0.0
+        worst_breakdown: Dict[str, bool] = {}
+        for j, other in enumerate(bundles):
+            if i == j:
+                continue
+            penalty, breakdown = similarity_penalty_between(profiles[i], profiles[j])
+            if penalty > worst_penalty:
+                worst_penalty = penalty
+                worst_breakdown = breakdown
+
+        penalty = round(worst_penalty, 2)
+        breakdown = diversity_breakdown_penalties(worst_breakdown)
+        setattr(scored, 'diversity_penalty', penalty)
+        setattr(scored, 'diversity_breakdown', breakdown)
+        bundle = _bundle_obj(scored)
+        bundle.diversity_penalty = penalty
+        bundle.diversity_breakdown = breakdown
+
+    return bundles
 
 
 def personalize_wardrobe(

@@ -2,6 +2,11 @@ import random
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Set
 from api.models import WardrobeItem, ColorFamily, OccasionType, Category, OutfitBundle
+from services.occasion_taxonomy import (
+    derive_bundle_occasions,
+    expand_occasion_list,
+    normalize_occasion_list,
+)
 
 # ==========================================
 # PART 1: Color System
@@ -199,6 +204,7 @@ def calculate_compatibility_score(items: List[WardrobeItem]) -> dict:
 
     return {"score": score, "is_valid": True}
 
+
 # ==========================================
 # PART 4: Style Tag Assignment
 # ==========================================
@@ -344,11 +350,19 @@ def assign_style_tags(items: List[WardrobeItem]) -> List[dict]:
 def generate_bundles(
     user_id: str,
     wardrobe_items: List[WardrobeItem],
-    occasion_filter: Optional[OccasionType] = None,
+    occasion_filter: Optional[object] = None,
     avoided_colors: List[str] = None
 ) -> List[dict]:
     if avoided_colors is None:
         avoided_colors = []
+
+    # Occasion filter: accept a single occasion or a list, expand through the
+    # hierarchy (a parent request matches every descendant child, and a child
+    # request matches its implied parent).
+    expanded_occasions: Optional[Set[str]] = None
+    if occasion_filter:
+        filters = occasion_filter if isinstance(occasion_filter, (list, tuple, set)) else [occasion_filter]
+        expanded_occasions = expand_occasion_list(filters)
 
     initial_pool = wardrobe_items
 
@@ -361,8 +375,11 @@ def generate_bundles(
                 filtered_pool.append(item)
         initial_pool = filtered_pool
 
-    if occasion_filter:
-        initial_pool = [i for i in initial_pool if occasion_filter in i.occasion_type]
+    if expanded_occasions is not None:
+        initial_pool = [
+            i for i in initial_pool
+            if expanded_occasions & set(normalize_occasion_list(i.occasion_type))
+        ]
 
     tops = [i for i in initial_pool if i.category == 'Top']
     bottoms = [i for i in initial_pool if i.category == 'Bottom']
@@ -413,9 +430,14 @@ def generate_bundles(
     bundles = []
     for combo in valid_combinations:
         rand_str = ''.join(random.choices('0123456789abcdefghijklmnopqrstuvwxyz', k=7))
-        occ_tags = list(set([occ for item in combo['items'] for occ in item.occasion_type]))
-        if occasion_filter:
-            occ_tags = [tag for tag in occ_tags if tag == occasion_filter]
+        # Bundle occasions are DERIVED from the constituent items' occasions
+        # (intersection -> majority -> union), never a blind union, and never
+        # sent back to Gemini. Parent tags are implied automatically.
+        occ_tags = derive_bundle_occasions([
+            getattr(item, 'occasion_type', None) or [] for item in combo['items']
+        ])
+        if expanded_occasions is not None:
+            occ_tags = [tag for tag in occ_tags if tag in expanded_occasions]
         
         mood_tags_set = set()
         for item in combo['items']:
@@ -442,7 +464,7 @@ def generate_bundles(
 
 
 # ==========================================
-# PART 6: Diversity / Similarity Re-ranking
+# PART 6: Diversity / Similarity
 # ==========================================
 
 # Configurable penalties applied at selection time. The base bundle score is
@@ -568,93 +590,26 @@ def similarity_penalty_between(
     return penalty, breakdown
 
 
-def _bundle_id(bundle_obj) -> str:
-    inner = getattr(bundle_obj, 'bundle', bundle_obj)
-    return getattr(inner, 'bundle_id', None) or getattr(bundle_obj, 'bundle_id', '') or ''
-
-
-def re_rank_bundles_for_diversity(
-    bundles: List,
-    top_n: Optional[int] = None,
-    item_lookup: Optional[dict] = None,
+def diversity_breakdown_penalties(
+    breakdown: dict,
     penalties: Optional[dict] = None,
-    score_attr: str = 'final_score',
-) -> List:
-    """Greedy diversity-aware re-ranking of already-scored bundles.
+) -> dict:
+    """Map a boolean similarity breakdown to the numeric penalty per component.
 
-    Operates AFTER generation and scoring. It never removes a bundle from the
-    pool: every candidate is compared against the bundles selected so far and
-    picked greedily by its diversity-adjusted score, so a similar bundle can
-    still surface later if the UI requests enough results.
+    Each matched component contributes its configured ``DIVERSITY_PENALTIES``
+    value (0 when unmatched), so the numeric breakdown always sums back to the
+    total penalty: ``sum(values) == similarity_penalty_between(...)[0]``.
 
-    Each returned bundle keeps its original ``final_score`` and gains
-    ``diversity_penalty``, ``adjusted_score``, ``similar_to`` and
-    ``similarity_breakdown`` attributes for debugging/tuning. ``top_n`` caps
-    the returned count; when ``None`` the whole pool is returned re-ordered.
+    This is purely presentational — it reuses the exact penalty constants the
+    similarity calculation already applied, it does not compute new penalties.
     """
-    if not bundles:
-        return []
-    if len(bundles) == 1:
-        return list(bundles)
-
-    effective_top_n = len(bundles) if top_n is None else min(int(top_n), len(bundles))
-    candidates = [
-        {
-            'obj': bundle,
-            'final_score': float(getattr(bundle, score_attr, 0.0)),
-            'profile': bundle_diversity_profile(getattr(bundle, 'bundle', bundle), item_lookup),
-        }
-        for bundle in bundles
-    ]
-
-    selected: List[dict] = []
-    remaining = list(candidates)
-
-    for _ in range(effective_top_n):
-        best = None
-        best_adjusted = None
-        for cand in remaining:
-            if not selected:
-                penalty = 0.0
-                breakdown: dict = {}
-                similar_to = None
-            else:
-                worst_penalty = -1.0
-                worst_breakdown: dict = {}
-                worst_similar = None
-                for sel in selected:
-                    p, br = similarity_penalty_between(
-                        cand['profile'], sel['profile'], penalties,
-                    )
-                    if p > worst_penalty:
-                        worst_penalty = p
-                        worst_breakdown = br
-                        worst_similar = _bundle_id(sel['obj'])
-                penalty = worst_penalty
-                breakdown = worst_breakdown
-                similar_to = worst_similar
-
-            adjusted = cand['final_score'] - penalty
-            if best is None or (
-                adjusted > best_adjusted
-                or (adjusted == best_adjusted and cand['final_score'] > best['final_score'])
-            ):
-                best = cand
-                best_adjusted = adjusted
-                best_penalty = penalty
-                best_breakdown = breakdown
-                best_similar = similar_to
-
-        obj = best['obj']
-        obj.diversity_penalty = round(best_penalty, 2)
-        obj.adjusted_score = round(best_adjusted, 2)
-        obj.similar_to = best_similar
-        obj.similarity_breakdown = best_breakdown
-
-        selected.append(best)
-        remaining.remove(best)
-
-    return [cand['obj'] for cand in selected]
+    effective = dict(DIVERSITY_PENALTIES)
+    if penalties:
+        effective.update(penalties)
+    return {
+        key: (effective[key] if matched else 0)
+        for key, matched in (breakdown or {}).items()
+    }
 
 
 def recommend_bundle_for_anchor(

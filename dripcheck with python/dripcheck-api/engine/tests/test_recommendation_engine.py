@@ -1,4 +1,4 @@
-"""Tests for the RecommendationEngine (Step 4) and score blending."""
+"""Tests for the RecommendationEngine (Step 4) and canonical ranking score."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ django.setup()
 from engine.personalization_engine import DEFAULT_WEIGHTS  # noqa: E402
 from engine.recommendation_engine import (  # noqa: E402
     RecommendationEngine,
-    combine_scores,
+    bundle_ranking_score,
     personalize_wardrobe,
 )
 from engine.tests.helpers import make_item  # noqa: E402
@@ -57,18 +57,17 @@ def build_balanced_wardrobe() -> list:
     return items
 
 
-class CombineScoresTest(unittest.TestCase):
-    def test_default_blend(self) -> None:
-        self.assertEqual(combine_scores(100, 50), 80.0)  # 0.6*100 + 0.4*50
+class BundleRankingScoreTest(unittest.TestCase):
+    def test_ranking_is_compat_plus_personalization_minus_penalty(self) -> None:
+        self.assertEqual(bundle_ranking_score(90, 25, 0), 115.0)
+        self.assertEqual(bundle_ranking_score(92, 24, 20), 96.0)
+        self.assertEqual(bundle_ranking_score(88, 27, 5), 110.0)
 
-    def test_custom_weights(self) -> None:
-        self.assertEqual(combine_scores(100, 50, compat_weight=0.2, pers_weight=0.8), 60.0)
+    def test_negative_penalty_is_normalized(self) -> None:
+        self.assertEqual(bundle_ranking_score(90, 20, -18), 92.0)
 
-    def test_zero_total_weights_do_not_crash(self) -> None:
-        self.assertAlmostEqual(combine_scores(100, 50, compat_weight=0, pers_weight=0), 0.0)
-
-    def test_result_clamped(self) -> None:
-        self.assertEqual(combine_scores(200, 200), 100.0)
+    def test_penalty_is_never_added(self) -> None:
+        self.assertEqual(bundle_ranking_score(90, 20, 0), 110.0)
 
 
 class RecommendationEngineTest(unittest.TestCase):
@@ -97,28 +96,38 @@ class RecommendationEngineTest(unittest.TestCase):
         result = self.engine.recommend(self.items, USER_PROFILE, user_id='u1')
         self.assertEqual(result.profile.total_items, len(self.items))
         self.assertTrue(result.bundles)
-        final_scores = [b.final_score for b in result.bundles]
-        self.assertEqual(final_scores, sorted(final_scores, reverse=True))
+        ranking_scores = [b.ranking_score for b in result.bundles]
+        self.assertEqual(ranking_scores, sorted(ranking_scores, reverse=True))
         for scored in result.bundles:
-            self.assertIsNotNone(scored.base_score)
+            self.assertIsNotNone(scored.compatibility_score)
             self.assertEqual(scored.personalization_score, round(scored.personalization_score, 2))
-            self.assertEqual(scored.final_score, round(scored.base_score + scored.personalization_score, 2))
-
-    def test_bundle_base_score_is_item_average_blend(self) -> None:
-        result = self.engine.recommend(self.items, USER_PROFILE, user_id='u1')
-        scores = {r.item_id: r.personalization_score for r in result.ranked_items}
-        for scored in result.bundles:
-            item_scores = [scores[iid] for iid in scored.bundle.items if iid in scores]
-            self.assertTrue(item_scores)
-            self.assertAlmostEqual(
-                scored.base_score,
-                combine_scores(
+            self.assertGreaterEqual(scored.diversity_penalty, 0)
+            # Canonical formula: ranking = compatibility + personalization − diversity.
+            self.assertEqual(
+                scored.ranking_score,
+                bundle_ranking_score(
                     scored.compatibility_score,
-                    sum(item_scores) / len(item_scores),
-                    self.engine.compat_weight,
-                    self.engine.pers_weight,
+                    scored.personalization_score,
+                    scored.diversity_penalty,
                 ),
-                delta=0.01,
+            )
+
+    def test_ranking_ignores_item_personalization(self) -> None:
+        # The ranking must be exactly compat + onboarding bonus − penalty:
+        # item-level personalization (rank_items) plays no part in it.
+        result = self.engine.recommend(self.items, USER_PROFILE, user_id='u1')
+        item_scores = {r.item_id: r.personalization_score for r in result.ranked_items}
+        for scored in result.bundles:
+            bundle_scores = [item_scores[iid] for iid in scored.bundle.items if iid in item_scores]
+            self.assertTrue(bundle_scores)
+            self.assertNotEqual(
+                scored.ranking_score,
+                round(
+                    scored.compatibility_score
+                    + sum(bundle_scores) / len(bundle_scores)
+                    - scored.diversity_penalty,
+                    2,
+                ),
             )
 
     def test_top_k_limits_items_fed_to_engine(self) -> None:
@@ -167,17 +176,25 @@ class RecommendationEngineTest(unittest.TestCase):
                 item = item_lookup.get(iid)
                 self.assertNotEqual((item.primary_color or '').lower(), 'red')
 
-    def test_custom_blend_weights_affect_base_ranking(self) -> None:
-        engine = RecommendationEngine(compat_weight=0.0, pers_weight=1.0)
-        result = engine.recommend(self.items, USER_PROFILE, user_id='u1')
-        for scored in result.bundles:
-            # With zero compat weight the base is the item personalization average.
-            self.assertLessEqual(scored.base_score, 100)
-            self.assertGreaterEqual(scored.personalization_score, 0)
-            self.assertEqual(
-                scored.final_score,
-                round(scored.base_score + scored.personalization_score, 2),
-            )
+    def test_occasion_filter_selects_but_does_not_change_scores(self) -> None:
+        # The occasion filter only narrows the candidate pool; it must never
+        # boost or alter the ranking values themselves.
+        unfiltered = self.engine.recommend(self.items, USER_PROFILE, user_id='u1')
+        filtered = self.engine.recommend(
+            self.items, USER_PROFILE, user_id='u1', occasion_filter='Casual',
+        )
+        self.assertTrue(filtered.bundles)
+        by_items = {
+            tuple(sorted(scored.bundle.items)): scored
+            for scored in unfiltered.bundles
+        }
+        for scored in filtered.bundles:
+            match = by_items.get(tuple(sorted(scored.bundle.items)))
+            self.assertIsNotNone(match)
+            self.assertEqual(scored.compatibility_score, match.compatibility_score)
+            self.assertEqual(scored.personalization_score, match.personalization_score)
+            self.assertEqual(scored.diversity_penalty, match.diversity_penalty)
+            self.assertEqual(scored.ranking_score, match.ranking_score)
 
     def test_personalize_wardrobe_convenience(self) -> None:
         ranked = personalize_wardrobe(self.items, USER_PROFILE)
